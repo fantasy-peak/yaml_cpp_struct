@@ -1,0 +1,17 @@
+---
+ch: 'A'
+price: 100.05
+count: 254
+content: "test-content"
+map: { "hello": "world", "hello1": "world1" }
+account_info:
+  flag: false
+  name: "xiaoli"
+  address: { "127.0.0.1": 8888, "127.0.0.2": 9999 }
+  msec: 100
+  tuple: ["xiaoming", 89]
+  map_tuple: {"xiaoxin": ["map_tuple", 254]}
+
+vec: ["v110", "v120"]
+set_vec: [9, 5, 7]
+account_type: "Personal"

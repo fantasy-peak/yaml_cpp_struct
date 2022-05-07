@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format2.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+
+<package format="2">
+  <name>magic_enum</name>
+  <version>0.0.1</version>
+  <description>
+    yaml packet for modern C++,
+  </description>
+
+  <maintainer email="1356346239@qq.com">fantasy-peak</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>cmake</buildtool_depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>
