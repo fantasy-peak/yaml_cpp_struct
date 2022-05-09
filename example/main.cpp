@@ -143,8 +143,9 @@ struct Config {
 	std::vector<std::string> vec;
 	std::unordered_set<uint8_t> set_vec;
 	AccountType account_type;
+	std::variant<int, std::vector<int>> v1;
 };
-YCS_ADD_STRUCT(Config, ch, price, count, content, map, account_info, vec, set_vec, account_type)
+YCS_ADD_STRUCT(Config, ch, price, count, content, map, account_info, vec, set_vec, account_type, v1)
 
 std::string to_string(const Config& cfg) {
 	std::stringstream ss;
@@ -152,7 +153,7 @@ std::string to_string(const Config& cfg) {
 	   << " price=" << std::to_string(cfg.price) << " count=" << (int32_t)cfg.count
 	   << " content=" << cfg.content << " map=" << to_string(cfg.map) << " account_info=" << to_string(cfg.account_info)
 	   << " vec=" << to_string(cfg.vec) << " set_vec=" << to_string(cfg.set_vec) << " account_type=" << to_string(cfg.account_type)
-	   << " ch=" << to_string(cfg.ch);
+	   << " ch=" << to_string(cfg.ch) << " v1=" << to_string(std::get<1>(cfg.v1));
 	return ss.str();
 }
 

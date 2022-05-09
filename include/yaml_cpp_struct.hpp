@@ -170,6 +170,29 @@ struct convert<std::tuple<T...>> {
 	}
 };
 
+template <typename... T>
+struct convert<std::variant<T...>> {
+	static bool decode(const Node& node, std::variant<T...>& rhs) {
+		bool flag = false;
+		([&]() {
+			if (flag)
+				return;
+			try {
+				rhs = yaml_cpp_struct::node_as<T>(node);
+				flag = true;
+			} catch (...) {
+			}
+		}(), ...);
+		return flag;
+	}
+
+	static Node encode(const std::variant<T...>& rhs) {
+		Node node;
+		std::visit([&](auto& v) { node = Node{yaml_cpp_struct::cast(v)}; }, rhs);
+		return node;
+	}
+};
+
 } // namespace YAML
 
 #define YCS_ADD_STRUCT(T, ...)                                                         \
@@ -180,14 +203,14 @@ struct convert<std::tuple<T...>> {
 		static bool decode(const Node& node, T& rhs) {                                 \
 			visit_struct::for_each(rhs, [&](const char* name, auto& value) {           \
 				using ToType = std::remove_reference_t<std::decay_t<decltype(value)>>; \
-				if constexpr (yaml_cpp_struct::is_optional<ToType>()) {                            \
+				if constexpr (yaml_cpp_struct::is_optional<ToType>()) {                \
 					try {                                                              \
-						value = yaml_cpp_struct::node_as<ToType>(node[name]);                      \
+						value = yaml_cpp_struct::node_as<ToType>(node[name]);          \
 					} catch (const std::runtime_error&) {                              \
 					}                                                                  \
 				}                                                                      \
 				else                                                                   \
-					value = yaml_cpp_struct::node_as<ToType>(node[name]);                          \
+					value = yaml_cpp_struct::node_as<ToType>(node[name]);              \
 			});                                                                        \
 			return true;                                                               \
 		}                                                                              \
@@ -201,26 +224,26 @@ struct convert<std::tuple<T...>> {
 	};                                                                                 \
 	}
 
-#define YCS_ADD_ENUM(E, ...)                                                             \
-	namespace YAML {                                                                     \
-	template <>                                                                          \
-	struct convert<E> {                                                                  \
-		static bool decode(const Node& node, E& rhs) {                                   \
-			const auto enum_str = node.as<std::string>();                                \
-			auto value = magic_enum::enum_cast<E>(enum_str);                             \
-			if (value.has_value())                                                       \
-				rhs = value.value();                                                     \
-			else {                                                                       \
+#define YCS_ADD_ENUM(E, ...)                                                                         \
+	namespace YAML {                                                                                 \
+	template <>                                                                                      \
+	struct convert<E> {                                                                              \
+		static bool decode(const Node& node, E& rhs) {                                               \
+			const auto enum_str = node.as<std::string>();                                            \
+			auto value = magic_enum::enum_cast<E>(enum_str);                                         \
+			if (value.has_value())                                                                   \
+				rhs = value.value();                                                                 \
+			else {                                                                                   \
 				auto error = yaml_cpp_struct::string_format("bad enum value: %s", enum_str.c_str()); \
-				throw YAML::RepresentationException(node.Mark(), error);                 \
-			}                                                                            \
-			return true;                                                                 \
-		}                                                                                \
-		static Node encode(const E& rhs) {                                               \
-			auto enum_name = magic_enum::enum_name(rhs);                                 \
-			return Node{enum_name.data()};                                               \
-		}                                                                                \
-	};                                                                                   \
+				throw YAML::RepresentationException(node.Mark(), error);                             \
+			}                                                                                        \
+			return true;                                                                             \
+		}                                                                                            \
+		static Node encode(const E& rhs) {                                                           \
+			auto enum_name = magic_enum::enum_name(rhs);                                             \
+			return Node{enum_name.data()};                                                           \
+		}                                                                                            \
+	};                                                                                               \
 	}
 
 #endif
