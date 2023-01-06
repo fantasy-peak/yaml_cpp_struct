@@ -1,5 +1,6 @@
 #include <spdlog/spdlog.h>
 #include <yaml_cpp_struct.hpp>
+#include <iostream>
 
 template <typename... Ts>
 std::string to_string(const Ts&... ts) {
@@ -133,6 +134,27 @@ std::string to_string(const AccountInfo& aif) {
 	return ss.str();
 }
 
+struct DefaultTest {
+	bool flag{false};
+	std::string name{"hello world"};
+	std::unordered_map<std::string, int> address{{"127.0.0.1", 8856}};
+	std::optional<std::string> num{"90"};
+	std::chrono::milliseconds msec{56};
+	std::tuple<std::string, uint8_t> tuple{std::make_tuple("tuple", 58)};
+	std::unordered_map<std::string, std::tuple<std::string, int32_t>> map_tuple{{"test-default", std::make_tuple("001", 23)}};
+	AccountType account_type{AccountType::Company};
+};
+YCS_ADD_STRUCT(DefaultTest, flag, name, address, num, msec, tuple, map_tuple, account_type)
+
+std::string to_string(const DefaultTest& aif) {
+	std::stringstream ss;
+	ss << "DefaultTest"
+	   << " name=" << aif.name << " address=" << to_string(aif.address) << " num=" << to_string(aif.num)
+	   << " msec=" << aif.msec.count() << " tuple=" << to_string(aif.tuple) << " map_tuple=" << to_string(aif.map_tuple)
+	   << " flag=" << to_string(aif.flag);
+	return ss.str();
+}
+
 struct Config {
 	char ch;
 	double price;
@@ -144,8 +166,11 @@ struct Config {
 	std::unordered_set<uint8_t> set_vec;
 	AccountType account_type;
 	std::variant<int, std::vector<int>> v1;
+	DefaultTest default_test;
+	std::string default_str{"hello default"};
+	std::optional<std::string> default_opt{std::nullopt};
 };
-YCS_ADD_STRUCT(Config, ch, price, count, content, map, account_info, vec, set_vec, account_type, v1)
+YCS_ADD_STRUCT(Config, ch, price, count, content, map, account_info, vec, set_vec, account_type, v1, default_test, default_str, default_opt)
 
 std::string to_string(const Config& cfg) {
 	std::stringstream ss;
@@ -153,7 +178,8 @@ std::string to_string(const Config& cfg) {
 	   << " price=" << std::to_string(cfg.price) << " count=" << (int32_t)cfg.count
 	   << " content=" << cfg.content << " map=" << to_string(cfg.map) << " account_info=" << to_string(cfg.account_info)
 	   << " vec=" << to_string(cfg.vec) << " set_vec=" << to_string(cfg.set_vec) << " account_type=" << to_string(cfg.account_type)
-	   << " ch=" << to_string(cfg.ch) << " v1=" << to_string(std::get<1>(cfg.v1));
+	   << " ch=" << to_string(cfg.ch) << " v1=" << to_string(std::get<1>(cfg.v1)) << " default_test=" << to_string(cfg.default_test)
+	   << " default_str=" << to_string(cfg.default_str) << " default_opt=" << to_string(cfg.default_opt);
 	return ss.str();
 }
 
