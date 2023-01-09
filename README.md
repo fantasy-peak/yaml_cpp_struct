@@ -6,6 +6,7 @@ It's a wrapper, It's easy to mapping yaml to cpp's struct
 
 ## use examples
 ```
+// It relies on two other three open source libraries(yaml-cpp, visit_struct, magic_enum), Please refer to CMakeLists.txt of example
 git clone https://github.com/fantasy-peak/yaml_cpp_struct.git
 cd ypp/example
 mkdir build && cd build
@@ -21,17 +22,17 @@ make -j 9
 ch: 'A'
 price: 100.05
 count: 254
-content: "test-content"
-map: { "hello": "world", "hello1": "world1" }
+content: "i'm fantasy-peak"
+map: { "fantasy": "good", "peak": "good" }
 account_info:
   flag: false
-  name: "xiaoli"
+  name: "fantasy-peak"
   address: { "127.0.0.1": 8888, "127.0.0.2": 9999 }
   msec: 100
-  tuple: ["xiaoming", 89]
-  map_tuple: {"xiaoxin": ["map_tuple", 254]}
+  tuple: ["fantasy-peak", 89]
+  map_tuple: {"fantasy-peak": ["map_tuple", 254]}
 
-vec: ["v110", "v120"]
+vec: ["fantasy-001", "fantasy-002"]
 set_vec: [9, 5, 7]
 account_type: "Personal"
 ```
@@ -61,11 +62,12 @@ struct AccountInfo {
     std::string name;
     std::unordered_map<std::string, int> address;
     std::optional<std::string> num;
-    std::chrono::milliseconds msec;
+    std::chrono::milliseconds msec{100};
     std::tuple<std::string, uint8_t> tuple;
     std::unordered_map<std::string, std::tuple<std::string, int32_t>> map_tuple;
+    std::string default_str{"hello default"};
 };
-YCS_ADD_STRUCT(AccountInfo, flag, name, address, num, msec, tuple, map_tuple)
+YCS_ADD_STRUCT(AccountInfo, flag, name, address, num, msec, tuple, map_tuple, default_str)
 
 int main(int, char** argv) {
     auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(argv[1]);

@@ -2,17 +2,17 @@
 ch: 'A'
 price: 100.05
 count: 254
-content: "test-content"
-map: { "hello": "world", "hello1": "world1" }
+content: "i'm fantasy-peak"
+map: { "fantasy": "good", "peak": "good" }
 account_info:
   flag: false
-  name: "xiaoli"
+  name: "fantasy-peak"
   address: { "127.0.0.1": 8888, "127.0.0.2": 9999 }
   msec: 100
-  tuple: ["xiaoming", 89]
-  map_tuple: {"xiaoxin": ["map_tuple", 254]}
+  tuple: ["fantasy-peak", 89]
+  map_tuple: {"fantasy-peak": ["map_tuple", 254]}
 
-vec: ["v110", "v120"]
+vec: ["fantasy-001", "fantasy-002"]
 set_vec: [9, 5, 7]
 account_type: "Personal"
 v1: [8, 5, 65]

@@ -196,6 +196,36 @@ struct convert<std::variant<T...>> {
 
 } // namespace YAML
 
+#ifdef NOT_USE_YCS_INIT_VALUE
+#define YCS_ADD_STRUCT(T, ...)                                                         \
+	VISITABLE_STRUCT(T, __VA_ARGS__);                                                  \
+	namespace YAML {                                                                   \
+	template <>                                                                        \
+	struct convert<T> {                                                                \
+		static bool decode(const Node& node, T& rhs) {                                 \
+			visit_struct::for_each(rhs, [&](const char* name, auto& value) {           \
+				using ToType = std::remove_reference_t<std::decay_t<decltype(value)>>; \
+				if constexpr (yaml_cpp_struct::is_optional<ToType>()) {                \
+					try {                                                              \
+						value = yaml_cpp_struct::node_as<ToType>(node[name]);          \
+					} catch (const std::runtime_error&) {                              \
+					}                                                                  \
+				}                                                                      \
+				else                                                                   \
+					value = yaml_cpp_struct::node_as<ToType>(node[name]);              \
+			});                                                                        \
+			return true;                                                               \
+		}                                                                              \
+		static Node encode(const T& rhs) {                                             \
+			Node node(NodeType::Map);                                                  \
+			visit_struct::for_each(rhs, [&](const char* name, auto& value) {           \
+				node[name] = value;                                                    \
+			});                                                                        \
+			return node;                                                               \
+		}                                                                              \
+	};                                                                                 \
+	}
+#else
 #define YCS_ADD_STRUCT(T, ...)                                                         \
 	VISITABLE_STRUCT(T, __VA_ARGS__);                                                  \
 	namespace YAML {                                                                   \
@@ -220,6 +250,7 @@ struct convert<std::variant<T...>> {
 		}                                                                              \
 	};                                                                                 \
 	}
+#endif
 
 #define YCS_ADD_ENUM(E, ...)                                                                         \
 	namespace YAML {                                                                                 \

@@ -1,6 +1,8 @@
+// #define NOT_USE_YCS_INIT_VALUE
+
 #include <spdlog/spdlog.h>
-#include <yaml_cpp_struct.hpp>
 #include <iostream>
+#include <yaml_cpp_struct.hpp>
 
 template <typename... Ts>
 std::string to_string(const Ts&... ts) {
