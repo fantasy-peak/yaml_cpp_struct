@@ -4,6 +4,11 @@
 
 It's a wrapper, It's easy to mapping yaml to cpp's struct
 
+## note
+
+main branch need >= c++17, if you need to use c++11, please use cpp11 branch. cpp11 branch not support std::variant.
+Please refer to example for cpp11 branch
+
 ## use examples
 ```
 // It relies on two other three open source libraries(yaml-cpp, visit_struct, magic_enum), Please refer to CMakeLists.txt of example
