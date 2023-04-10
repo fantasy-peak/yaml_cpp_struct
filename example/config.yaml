@@ -15,5 +15,4 @@ account_info:
 vec: ["fantasy-001", "fantasy-002"]
 set_vec: [9, 5, 7]
 account_type: "Personal"
-v1: [8, 5, 65]
 default_opt: "yyds"
