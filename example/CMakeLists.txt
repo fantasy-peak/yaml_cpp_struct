@@ -53,6 +53,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(yaml_cpp_struct)
 
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.2
+)
+FetchContent_MakeAvailable(json)
+
 add_executable(example main.cpp)
 target_include_directories(example PUBLIC ${CMAKE_BINARY_DIR}/_deps/visit_struct-src/include/;)
 target_link_libraries(example
@@ -61,4 +68,5 @@ target_link_libraries(example
     yaml_cpp_struct
     pthread
     spdlog::spdlog
+    nlohmann_json::nlohmann_json
 )

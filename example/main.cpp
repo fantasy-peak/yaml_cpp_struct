@@ -1,4 +1,5 @@
 // #define NOT_USE_YCS_INIT_VALUE
+// #define OPEN_YAML_TO_JSON
 
 #include <spdlog/spdlog.h>
 #include <iostream>
@@ -194,5 +195,8 @@ int main(int, char** argv) {
 	spdlog::info("\n{}", to_string(cfg.value()));
 	auto [str, e] = yaml_cpp_struct::to_yaml(cfg.value());
 	spdlog::info("\n{}", str.value());
+#ifdef OPEN_YAML_TO_JSON
+	spdlog::info("\n{}", yaml_cpp_struct::yaml_to_json(str.value()).dump());
+#endif
 	return 0;
 }
