@@ -46,12 +46,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(visit_struct)
 
-FetchContent_Declare(
-    yaml_cpp_struct
-    GIT_REPOSITORY https://github.com/fantasy-peak/yaml_cpp_struct.git
-    GIT_TAG main
-)
-FetchContent_MakeAvailable(yaml_cpp_struct)
+# FetchContent_Declare(
+#     yaml_cpp_struct
+#     GIT_REPOSITORY https://github.com/fantasy-peak/yaml_cpp_struct.git
+#     GIT_TAG main
+# )
+# FetchContent_MakeAvailable(yaml_cpp_struct)
 
 FetchContent_Declare(
     json
@@ -60,12 +60,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+include_directories(../include)
 add_executable(example main.cpp)
 target_include_directories(example PUBLIC ${CMAKE_BINARY_DIR}/_deps/visit_struct-src/include/;)
 target_link_libraries(example
     yaml-cpp
     magic_enum
-    yaml_cpp_struct
+    # yaml_cpp_struct
     pthread
     spdlog::spdlog
     nlohmann_json::nlohmann_json

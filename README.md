@@ -1,5 +1,7 @@
 # yaml_cpp_struct
 
+[![](https://github.com/fantasy-peak/yaml_cpp_struct/workflows/test/badge.svg)](https://github.com/fantasy-peak/yaml_cpp_struct/actions)
+
 ## function
 
 It's a wrapper, It's easy to mapping yaml to cpp's struct

@@ -1,0 +1,20 @@
+name: test
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [macos-12, ubuntu-22.04]
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: build example
+      run: cd example && mkdir build && cd build && cmake .. && make -j2
+    - name: run example
+      run: cd example && cd build && ./example ../config.yaml
+
