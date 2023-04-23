@@ -125,15 +125,21 @@ inline std::tuple<std::optional<std::string>, std::string> to_yaml(const T& obj)
 	}
 }
 
-template <typename T>
-inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string& filename) {
+template <typename T, bool is_file = true>
+inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string& str) {
 	try {
-		const auto node = YAML::LoadFile(filename);
-		return std::make_tuple(yaml_cpp_struct::node_as<T>(node), "");
+		if constexpr (is_file) {
+			const auto node = YAML::LoadFile(str);
+			return std::make_tuple(yaml_cpp_struct::node_as<T>(node), "");
+		}
+		else {
+			const auto node = YAML::Load(str);
+			return std::make_tuple(yaml_cpp_struct::node_as<T>(node), "");
+		}
 	} catch (const YAML::BadFile& e) {
-		return std::make_tuple(std::nullopt, string_format("%s not found or broken", filename.c_str()));
+		return std::make_tuple(std::nullopt, string_format("%s not found or broken", str.c_str()));
 	} catch (const std::exception& e) {
-		return std::make_tuple(std::nullopt, string_format("on parsing %s: %s", filename.c_str(), e.what()));
+		return std::make_tuple(std::nullopt, string_format("on parsing %s: %s", str.c_str(), e.what()));
 	}
 }
 

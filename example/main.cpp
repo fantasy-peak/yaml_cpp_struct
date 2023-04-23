@@ -1,8 +1,10 @@
 // #define NOT_USE_YCS_INIT_VALUE
 // #define OPEN_YAML_TO_JSON
 
-#include <spdlog/spdlog.h>
+#include <fstream>
 #include <iostream>
+
+#include <spdlog/spdlog.h>
 #include <yaml_cpp_struct.hpp>
 
 template <typename... Ts>
@@ -187,11 +189,24 @@ std::string to_string(const Config& cfg) {
 }
 
 int main(int, char** argv) {
+#if 0
+	std::ifstream in(argv[1]);
+	std::ostringstream tmp;
+	tmp << in.rdbuf();
+	std::string yaml_str = tmp.str();
+	auto [cfg, error] = yaml_cpp_struct::from_yaml<Config, false>(yaml_str);
+	if (!cfg) {
+		spdlog::error("{}", error);
+		return -1;
+	}
+#else
+	spdlog::info("Load yaml config");
 	auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(argv[1]);
 	if (!cfg) {
 		spdlog::error("{}", error);
 		return -1;
 	}
+#endif
 	spdlog::info("\n{}", to_string(cfg.value()));
 	auto [str, e] = yaml_cpp_struct::to_yaml(cfg.value());
 	spdlog::info("\n{}", str.value());
