@@ -17,4 +17,3 @@ jobs:
       run: cd example && mkdir build && cd build && cmake .. && make -j2
     - name: run example
       run: cd example && cd build && ./example ../config.yaml
-

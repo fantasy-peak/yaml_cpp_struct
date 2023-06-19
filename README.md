@@ -15,11 +15,15 @@ Please refer to example for cpp11 branch
 ```
 // It relies on two other three open source libraries(yaml-cpp, visit_struct, magic_enum), Please refer to CMakeLists.txt of example
 git clone https://github.com/fantasy-peak/yaml_cpp_struct.git
-cd ypp/example
+cd ./yaml_cpp_struct/example
 mkdir build && cd build
 cmake ..
 make -j 9
 ./example ../config.yaml
+// use xmake
+cd ./yaml_cpp_struct/example
+xmake build -v
+xmake run example ../../../../config.yaml
 ```
 
 
