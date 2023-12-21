@@ -143,6 +143,22 @@ inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string& st
 	}
 }
 
+template <typename T>
+inline std::tuple<std::optional<T>, std::string> from_yaml_env(const std::string& str, const std::string& prefix) {
+	YAML::Node yaml_node = YAML::LoadFile(str);
+	for (YAML::iterator it = yaml_node.begin(); it != yaml_node.end(); ++it) {
+		std::string node_name = it->first.as<std::string>();
+		std::transform(node_name.begin(), node_name.end(), node_name.begin(), ::toupper);
+		auto environment_name = prefix + node_name;
+		auto environment_content_ptr = std::getenv(environment_name.data());
+		if (!environment_content_ptr)
+			continue;
+		std::string value{environment_content_ptr};
+		it->second = YAML::Load(value);
+	}
+	return from_yaml<T, false>(YAML::Dump(yaml_node));
+}
+
 } // namespace yaml_cpp_struct
 
 namespace YAML {

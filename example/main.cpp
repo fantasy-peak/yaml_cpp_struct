@@ -174,8 +174,9 @@ struct Config {
 	DefaultTest default_test;
 	std::string default_str{"hello default"};
 	std::optional<std::string> default_opt{std::nullopt};
+	std::vector<std::string> ips;
 };
-YCS_ADD_STRUCT(Config, ch, price, count, content, map, account_info, vec, set_vec, account_type, v1, default_test, default_str, default_opt)
+YCS_ADD_STRUCT(Config, ch, price, count, content, map, account_info, vec, set_vec, account_type, v1, default_test, default_str, default_opt, ips)
 
 std::string to_string(const Config& cfg) {
 	std::stringstream ss;
@@ -201,7 +202,13 @@ int main(int, char** argv) {
 	}
 #else
 	spdlog::info("Load yaml config");
-	auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(argv[1]);
+	// auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(argv[1]);
+	// if (!cfg) {
+	// 	spdlog::error("{}", error);
+	// 	return -1;
+	// }
+	//  export YCS_ENV_IPS=["Google","Runoob","Taobao"]
+	auto [cfg, error] = yaml_cpp_struct::from_yaml_env<Config>(argv[1], "YCS_ENV_");
 	if (!cfg) {
 		spdlog::error("{}", error);
 		return -1;
