@@ -210,7 +210,7 @@ int main(int, char** argv) {
 	//  export YCS_ENV_IPS=["Google","Runoob","Taobao"]
 	auto [cfg, error] = yaml_cpp_struct::from_yaml_env<Config>(argv[1], "YCS_ENV_");
 	if (!cfg) {
-		spdlog::error("{}", error);
+		spdlog::error("error: [{}]", error);
 		return -1;
 	}
 #endif
