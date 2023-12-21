@@ -69,6 +69,28 @@ inline nlohmann::json yaml2json(const YAML::Node& root) {
 
 namespace yaml_cpp_struct {
 
+class Exception : public std::exception {
+public:
+	explicit Exception(const char* what) noexcept
+		: m_what(what) {
+	}
+
+	explicit Exception(const std::string& what) noexcept
+		: m_what(what) {
+	}
+
+	const char* what() const noexcept override {
+		return m_what.c_str();
+	}
+
+protected:
+	Exception() noexcept {
+	}
+
+private:
+	std::string m_what;
+};
+
 template <typename... Args>
 inline std::string string_format(const std::string& format, Args... args) {
 	int size_s = std::snprintf(nullptr, 0, format.c_str(), args...) + 1;
@@ -139,7 +161,7 @@ inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string& st
 	} catch (const YAML::BadFile& e) {
 		return std::make_tuple(std::nullopt, string_format("%s not found or broken", str.c_str()));
 	} catch (const std::exception& e) {
-		return std::make_tuple(std::nullopt, string_format("on parsing %s: %s", str.c_str(), e.what()));
+		return std::make_tuple(std::nullopt, string_format("on parsing %s -> %s", str.c_str(), e.what()));
 	}
 }
 
@@ -289,7 +311,12 @@ struct convert<std::variant<T...>> {
 					}                                                                  \
 				}                                                                      \
 				else                                                                   \
-					value = yaml_cpp_struct::node_as<ToType>(node[name]);              \
+					try {                                                              \
+						value = yaml_cpp_struct::node_as<ToType>(node[name]);          \
+					} catch (const std::runtime_error&) {                              \
+						auto error = yaml_cpp_struct::string_format("lost: %s", name); \
+						throw yaml_cpp_struct::Exception(error);                       \
+					}                                                                  \
 			});                                                                        \
 			return true;                                                               \
 		}                                                                              \
@@ -340,7 +367,7 @@ struct convert<std::variant<T...>> {
 				rhs = value.value();                                                                 \
 			else {                                                                                   \
 				auto error = yaml_cpp_struct::string_format("bad enum value: %s", enum_str.c_str()); \
-				throw YAML::RepresentationException(node.Mark(), error);                             \
+				throw yaml_cpp_struct::Exception(error);                                             \
 			}                                                                                        \
 			return true;                                                                             \
 		}                                                                                            \
