@@ -46,6 +46,7 @@ account_info:
 vec: ["fantasy-001", "fantasy-002"]
 set_vec: [9, 5, 7]
 account_type: "Personal"
+ips: ["127.0.0.1"]
 ```
 
 ```cpp
@@ -77,13 +78,16 @@ struct AccountInfo {
     std::tuple<std::string, uint8_t> tuple;
     std::unordered_map<std::string, std::tuple<std::string, int32_t>> map_tuple;
     std::string default_str{"hello default"};
+    std::vector<std::string> ips;
 };
-YCS_ADD_STRUCT(AccountInfo, flag, name, address, num, msec, tuple, map_tuple, default_str)
+YCS_ADD_STRUCT(AccountInfo, flag, name, address, num, msec, tuple, map_tuple, default_str, ips)
 
 int main(int, char** argv) {
     auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(argv[1]);
     auto [str, e] = yaml_cpp_struct::to_yaml(cfg.value());
+    // Load values from environment variables
+    // export YCS_ENV_IPS=["Google","Runoob","Taobao"]
+    // auto [cfg, error] = yaml_cpp_struct::from_yaml_env<Config>(argv[1], "YCS_ENV_");
     return 0;
 }
-
 ```
