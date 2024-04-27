@@ -306,7 +306,8 @@ struct convert<std::variant<T...>> {
 				using ToType = std::remove_reference_t<std::decay_t<decltype(value)>>; \
 				if constexpr (yaml_cpp_struct::is_optional<ToType>()) {                \
 					try {                                                              \
-						value = yaml_cpp_struct::node_as<ToType>(node[name]);          \
+						if (node[name])                                                \
+							value = yaml_cpp_struct::node_as<ToType>(node[name]);      \
 					} catch (const std::runtime_error&) {                              \
 					}                                                                  \
 				}                                                                      \
@@ -338,10 +339,15 @@ struct convert<std::variant<T...>> {
 		static bool decode(const Node& node, T& rhs) {                                 \
 			visit_struct::for_each(rhs, [&](const char* name, auto& value) {           \
 				using ToType = std::remove_reference_t<std::decay_t<decltype(value)>>; \
-				try {                                                                  \
-					value = yaml_cpp_struct::node_as<ToType>(node[name]);              \
-				} catch (const std::runtime_error&) {                                  \
+				if constexpr (yaml_cpp_struct::is_optional<ToType>()) {                \
+					if (node[name])                                                    \
+						value = yaml_cpp_struct::node_as<ToType>(node[name]);          \
 				}                                                                      \
+				else                                                                   \
+					try {                                                              \
+						value = yaml_cpp_struct::node_as<ToType>(node[name]);          \
+					} catch (const std::runtime_error&) {                              \
+					}                                                                  \
 			});                                                                        \
 			return true;                                                               \
 		}                                                                              \
