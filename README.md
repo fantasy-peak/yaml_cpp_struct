@@ -18,7 +18,8 @@ It's a header-only wrapper. It's easy to map YAML documents to C++ structs.
 - Structured errors with field path, line and column, plus a `Result<T>` API.
 - Node / stream / multi-document APIs (`from_node_result`, `from_stream_result`,
   `to_node_result`, `to_stream`, `from_yaml_all_result`).
-- Override values with environment variables, including nested fields.
+- Automatic environment variable loading with per-struct prefixes, nested
+  fields, explicit bindings and YAML value parsing.
 - Optional YAML to JSON conversion with `OPEN_YAML_TO_JSON`.
 
 ## note
@@ -193,6 +194,46 @@ Precedence: `YCS_OPT` defaults < config file < environment. An environment
 variable can also provide a field that is missing from the file, including a
 required field.
 
+### Nested structs
+
+```cpp
+struct Database {
+    std::string host;
+    int port;
+};
+YCS_ADD_STRUCT(Database, host, port)
+
+struct Config {
+    Database database;
+    bool debug;
+};
+YCS_ADD_STRUCT(Config, database, debug)
+YCS_ENV_PREFIX(Config, "APP_")
+```
+
+```bash
+export APP_DATABASE__HOST=db.internal
+export APP_DATABASE__PORT=5432
+export APP_DEBUG=true
+```
+
+The whole nested value can be overridden too:
+
+```bash
+export APP_DATABASE='{host: db.internal, port: 5432}'
+```
+
+A whole-field value wins over child variables. `std::optional<Struct>` works the
+same way: child variables engage the optional, and a whole-field value can set it
+directly.
+
+Explicit names on a nested struct become the base for its children:
+
+```cpp
+YCS_ADD_STRUCT(Config, YCS_ENV(database, "DB"))
+// DB__HOST, DB__PORT
+```
+
 Value parsing:
 
 - `std::string`, `std::filesystem::path` and `char` use the raw value;
@@ -235,7 +276,8 @@ Environment variables are only read when a prefix is declared (or an explicit
 `EnvOptions` is passed), so unrelated process variables are never scanned.
 
 `from_node_result` is the low-level Node decoder and does not apply environment
-variables. `from_yaml`, `from_stream`, `from_yaml_all` and `from_env` do.
+variables. `from_yaml_result`, `from_stream_result`, `from_yaml_all_result` and
+`from_env_result` do; the `from_yaml` convenience wrapper also does.
 
 ## Enums
 
@@ -248,10 +290,12 @@ account_type: "Personal"  # or: 1
 ## testing
 
 The unit tests use [GoogleTest](https://github.com/google/googletest) and are a
-standalone CMake project. They cover parsing, required and defaulted fields,
-error paths, 8-bit integers, enums, containers (including custom comparators /
-hashers), round-trips, environment overrides and the optional YAML -> JSON
-conversion.
+standalone CMake project. The suite currently has **50 cases** covering parsing,
+required and defaulted fields, error paths, 8-bit integers, enums, containers
+(including custom comparators / hashers), round-trips, environment loading
+(prefix/naming, nested and optional structs, explicit bindings, precedence,
+empty values, list separators, duplicate/conflict errors, audit callbacks,
+stream/multi-document merging) and the optional YAML -> JSON conversion.
 
 ```
 cmake -S tests -B tests/build -DCMAKE_BUILD_TYPE=Release

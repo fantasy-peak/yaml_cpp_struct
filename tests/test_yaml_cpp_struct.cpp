@@ -130,6 +130,36 @@ struct DuplicateEnv {
 };
 YCS_ADD_STRUCT(DuplicateEnv, YCS_ENV(a, "SAME_ENV"), YCS_ENV(b, "SAME_ENV"))
 
+struct OptionalNested {
+    std::optional<Inner> inner;
+};
+YCS_ADD_STRUCT(OptionalNested, YCS_OPT(inner, std::nullopt))
+YCS_ENV_PREFIX(OptionalNested, "APP_")
+
+struct EnvNaming {
+    Inner inner;
+};
+YCS_ADD_STRUCT(EnvNaming, inner)
+
+enum class EnvColor : uint8_t {
+    Red = 1,
+    Green = 2,
+};
+YCS_ADD_ENUM(EnvColor, Red, Green)
+
+struct EnvTypes {
+    EnvColor color{EnvColor::Red};
+    std::chrono::milliseconds timeout{0};
+    std::filesystem::path path;
+    std::variant<int, std::string> variant{0};
+    char letter{'x'};
+    std::optional<int> maybe;
+};
+YCS_ADD_STRUCT(EnvTypes, YCS_OPT(color, EnvColor::Red), YCS_OPT(timeout, std::chrono::milliseconds{0}),
+               YCS_OPT(path, std::filesystem::path{}), YCS_OPT(variant, 0), YCS_OPT(letter, 'x'),
+               YCS_OPT(maybe, std::nullopt))
+YCS_ENV_PREFIX(EnvTypes, "APP_")
+
 // In-class initializers deliberately differ from the YCS_OPT defaults, so the
 // tests prove that YCS_OPT is the single source of truth for missing fields.
 struct DefaultsOnly {
@@ -585,6 +615,103 @@ TEST(YamlCppStruct, EnvAudit) {
     ASSERT_EQ(applied.size(), std::size_t{1});
     EXPECT_EQ(applied[0].first, std::string("APP_REQUIRED_FIELD"));
     EXPECT_EQ(applied[0].second, std::string("required_field"));
+}
+
+TEST(YamlCppStruct, OptionalNestedEnv) {
+    const auto nested = yaml_cpp_struct::from_env_result<OptionalNested>(
+        make_env({{"APP_INNER__VALUE", "1"}, {"APP_INNER__LABEL", "x"}}));
+    ASSERT_TRUE(nested.value.has_value()) << yaml_cpp_struct::format_error(nested.error);
+    ASSERT_TRUE(nested.value->inner.has_value());
+    EXPECT_EQ(nested.value->inner->value, 1);
+    EXPECT_EQ(nested.value->inner->label, std::string("x"));
+
+    const auto whole =
+        yaml_cpp_struct::from_env_result<OptionalNested>(make_env({{"APP_INNER", "{value: 2, label: y}"}}));
+    ASSERT_TRUE(whole.value.has_value()) << yaml_cpp_struct::format_error(whole.error);
+    ASSERT_TRUE(whole.value->inner.has_value());
+    EXPECT_EQ(whole.value->inner->value, 2);
+    EXPECT_EQ(whole.value->inner->label, std::string("y"));
+
+    const auto absent = yaml_cpp_struct::from_env_result<OptionalNested>(make_env({}));
+    ASSERT_TRUE(absent.value.has_value()) << yaml_cpp_struct::format_error(absent.error);
+    EXPECT_FALSE(absent.value->inner.has_value());
+}
+
+TEST(YamlCppStruct, EnvNamingOptions) {
+    yaml_cpp_struct::EnvOptions options;
+    options.prefix = "app_";
+    options.uppercase = false;
+    options.separator = "_";
+
+    const auto result = yaml_cpp_struct::from_env_result<EnvNaming>(
+        options, make_env({{"app_inner_value", "1"}, {"app_inner_label", "x"}}));
+    ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
+    EXPECT_EQ(result.value->inner.value, 1);
+    EXPECT_EQ(result.value->inner.label, std::string("x"));
+}
+
+TEST(YamlCppStruct, EnvTypes) {
+    const auto result = yaml_cpp_struct::from_env_result<EnvTypes>(make_env({{"APP_COLOR", "Green"},
+                                                                             {"APP_TIMEOUT", "1500"},
+                                                                             {"APP_PATH", "/tmp/x"},
+                                                                             {"APP_VARIANT", "hello"},
+                                                                             {"APP_LETTER", "Q"},
+                                                                             {"APP_MAYBE", "7"}}));
+    ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
+    EXPECT_EQ(result.value->color, EnvColor::Green);
+    EXPECT_EQ(result.value->timeout, std::chrono::milliseconds{1500});
+    EXPECT_EQ(result.value->path.string(), std::string("/tmp/x"));
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.value->variant));
+    EXPECT_EQ(std::get<std::string>(result.value->variant), std::string("hello"));
+    EXPECT_EQ(result.value->letter, 'Q');
+    ASSERT_TRUE(result.value->maybe.has_value());
+    EXPECT_EQ(*result.value->maybe, 7);
+
+    const auto null_maybe = yaml_cpp_struct::from_env_result<EnvTypes>(make_env({{"APP_MAYBE", "null"}}));
+    ASSERT_TRUE(null_maybe.value.has_value()) << yaml_cpp_struct::format_error(null_maybe.error);
+    EXPECT_FALSE(null_maybe.value->maybe.has_value());
+}
+
+TEST(YamlCppStruct, EnvStreamAndMultiDocument) {
+    auto options = yaml_cpp_struct::env_options_for<EnvOnly>();
+
+    std::istringstream in("optional_field: file\n");
+    const auto stream =
+        yaml_cpp_struct::from_stream_result<EnvOnly>(in, options, make_env({{"APP_REQUIRED_FIELD", "1"}}));
+    ASSERT_TRUE(stream.value.has_value()) << yaml_cpp_struct::format_error(stream.error);
+    EXPECT_EQ(stream.value->required_field, 1);
+    EXPECT_EQ(stream.value->optional_field, std::string("file"));
+
+    const auto docs = yaml_cpp_struct::from_yaml_all_result<EnvOnly>(
+        "---\nrequired_field: 1\n---\nrequired_field: 2\n", false, options, make_env({{"APP_OPTIONAL_FIELD", "env"}}));
+    ASSERT_TRUE(docs.value.has_value()) << yaml_cpp_struct::format_error(docs.error);
+    ASSERT_EQ(docs.value->size(), std::size_t{2});
+    EXPECT_EQ((*docs.value)[0].required_field, 1);
+    EXPECT_EQ((*docs.value)[1].required_field, 2);
+    EXPECT_EQ((*docs.value)[0].optional_field, std::string("env"));
+    EXPECT_EQ((*docs.value)[1].optional_field, std::string("env"));
+}
+
+TEST(YamlCppStruct, WholeNestedEnvWins) {
+    const auto result = yaml_cpp_struct::from_yaml_result<EnvConfig, false>(
+        "name: file\nnested:\n  value: 1\n  label: file\n",
+        make_env({{"APP_NESTED", "{value: 2, label: whole}"}, {"APP_NESTED__LABEL", "ignored"}}));
+    ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
+    EXPECT_EQ(result.value->nested.value, 2);
+    EXPECT_EQ(result.value->nested.label, std::string("whole"));
+}
+
+TEST(YamlCppStruct, EnvErrorMetadata) {
+    const auto duplicate = yaml_cpp_struct::from_env_result<DuplicateEnv>(make_env({{"SAME_ENV", "1"}}));
+    EXPECT_EQ(duplicate.error.code, yaml_cpp_struct::ErrorCode::EnvDuplicate);
+    EXPECT_EQ(duplicate.error.env_name, std::string("SAME_ENV"));
+    EXPECT_FALSE(duplicate.error.path.empty());
+
+    const auto conflict =
+        yaml_cpp_struct::from_yaml_result<EnvConfig, false>("nested: 5\n", make_env({{"APP_NESTED__LABEL", "x"}}));
+    EXPECT_EQ(conflict.error.code, yaml_cpp_struct::ErrorCode::EnvConflict);
+    EXPECT_EQ(conflict.error.env_name, std::string("APP_NESTED__LABEL"));
+    EXPECT_EQ(conflict.error.path, std::string("nested.label"));
 }
 
 TEST(YamlCppStruct, YamlToJson) {
