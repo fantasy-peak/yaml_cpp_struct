@@ -27,13 +27,13 @@ It's a header-only wrapper. It's easy to map YAML documents to C++ structs.
 main branch need >= c++17, if you need to use c++11, please use cpp11 branch. cpp11 branch not support std::variant.
 Please refer to example for cpp11 branch
 
-The example builds against yaml-cpp 0.9.0, magic_enum and visit_struct; yaml-cpp >= 0.7
+The example builds against yaml-cpp 0.9.0 and magic_enum; yaml-cpp >= 0.7
 should also work.
 
 ## use examples
 
 ```
-// It relies on two other three open source libraries(yaml-cpp, visit_struct, magic_enum), Please refer to CMakeLists.txt of example
+// It relies on two other three open source libraries(yaml-cpp, magic_enum), Please refer to CMakeLists.txt of example
 git clone https://github.com/fantasy-peak/yaml_cpp_struct.git
 cd ./yaml_cpp_struct/example
 mkdir build && cd build
@@ -151,6 +151,9 @@ if (!result) {
               << " code=" << static_cast<int>(result.error.code)
               << " message=" << result.error.message << '\n';
 }
+
+// Parse a YAML string instead of a file.
+auto from_text = yaml_cpp_struct::from_yaml_str_result<AccountInfo>(yaml_text);
 ```
 
 Node, stream and multi-document APIs:
@@ -165,6 +168,7 @@ auto stream_result = yaml_cpp_struct::from_stream_result<AccountInfo>(in);
 yaml_cpp_struct::to_stream(cfg.value(), std::cout);
 
 auto documents = yaml_cpp_struct::from_yaml_all_result<AccountInfo>("config.yaml");
+auto documents_from_text = yaml_cpp_struct::from_yaml_all_str_result<AccountInfo>(yaml_text);
 ```
 
 ## Environment variables

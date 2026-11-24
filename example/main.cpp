@@ -292,7 +292,7 @@ void verify_round_trip(const Config &cfg) {
     if (!str)
         return;
 
-    const auto [round_trip, parse_error] = yaml_cpp_struct::from_yaml<Config, false>(*str);
+    const auto [round_trip, parse_error] = yaml_cpp_struct::from_yaml_str<Config>(*str);
     check(round_trip.has_value(), "round-trip should parse");
     check(parse_error.empty(), "round-trip error message");
     if (!round_trip)
@@ -306,7 +306,7 @@ void verify_round_trip(const Config &cfg) {
 }
 
 void verify_8bit_fields() {
-    const auto [bytes, parse_error] = yaml_cpp_struct::from_yaml<ByteFields, false>("byte: 200\nsbyte: -100\n");
+    const auto [bytes, parse_error] = yaml_cpp_struct::from_yaml_str<ByteFields>("byte: 200\nsbyte: -100\n");
     check(bytes.has_value(), "8-bit fields should parse");
     check(parse_error.empty(), "8-bit parse error message");
     if (!bytes)
@@ -323,13 +323,13 @@ void verify_8bit_fields() {
         check(encoded->find("-100") != std::string::npos, "int8_t should encode as a number");
     }
 
-    const auto [overflow, overflow_error] = yaml_cpp_struct::from_yaml<ByteFields, false>("byte: 300\nsbyte: 0\n");
+    const auto [overflow, overflow_error] = yaml_cpp_struct::from_yaml_str<ByteFields>("byte: 300\nsbyte: 0\n");
     check(!overflow.has_value(), "uint8_t overflow should be rejected");
     check(!overflow_error.empty(), "uint8_t overflow error message");
 }
 
 void verify_set_container() {
-    const auto [values, parse_error] = yaml_cpp_struct::from_yaml<std::set<int>, false>("[3, 1, 2, 2]\n");
+    const auto [values, parse_error] = yaml_cpp_struct::from_yaml_str<std::set<int>>("[3, 1, 2, 2]\n");
     check(values.has_value(), "std::set should parse");
     check(parse_error.empty(), "std::set parse error message");
     if (!values)
@@ -345,15 +345,15 @@ void verify_set_container() {
 }
 
 void verify_enum_values() {
-    const auto [by_name, name_error] = yaml_cpp_struct::from_yaml<AccountType, false>("\"Company\"\n");
+    const auto [by_name, name_error] = yaml_cpp_struct::from_yaml_str<AccountType>("\"Company\"\n");
     check(by_name.has_value() && *by_name == AccountType::Company, "enum decoded by name");
     check(name_error.empty(), "enum by-name error message");
 
-    const auto [by_value, value_error] = yaml_cpp_struct::from_yaml<AccountType, false>("1\n");
+    const auto [by_value, value_error] = yaml_cpp_struct::from_yaml_str<AccountType>("1\n");
     check(by_value.has_value() && *by_value == AccountType::Personal, "enum decoded by numeric value");
     check(value_error.empty(), "enum by-value error message");
 
-    const auto [invalid, invalid_error] = yaml_cpp_struct::from_yaml<AccountType, false>("\"Unknown\"\n");
+    const auto [invalid, invalid_error] = yaml_cpp_struct::from_yaml_str<AccountType>("\"Unknown\"\n");
     check(!invalid.has_value(), "unknown enum name should be rejected");
     check(!invalid_error.empty(), "unknown enum error message");
 }

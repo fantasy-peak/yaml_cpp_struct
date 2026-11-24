@@ -22,10 +22,3 @@ FetchContent_Declare(
     GIT_TAG 369642f2b0ab2288bd2df1a977e1ee053b54eba2
 )
 FetchContent_MakeAvailable(magic_enum)
-
-FetchContent_Declare(
-    visit_struct
-    GIT_REPOSITORY https://github.com/garbageslam/visit_struct.git
-    GIT_TAG 8c91d2283c7050593df5b692a13cb0ea99ba81d5
-)
-FetchContent_MakeAvailable(visit_struct)

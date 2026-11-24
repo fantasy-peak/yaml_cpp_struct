@@ -28,8 +28,7 @@ find_package(Threads REQUIRED)
 
 add_executable(example main.cpp)
 target_include_directories(example PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${visit_struct_SOURCE_DIR}/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(example PRIVATE

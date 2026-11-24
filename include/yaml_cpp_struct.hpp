@@ -34,7 +34,6 @@
 #include <vector>
 
 #include <magic_enum.hpp>
-#include <visit_struct/visit_struct.hpp>
 #include <yaml-cpp/yaml.h>
 
 #ifdef OPEN_YAML_TO_JSON
@@ -382,6 +381,9 @@ inline Exception missing_field_error(const char *key, const char *struct_name, c
                            mark.line, mark.column});
 }
 
+// Specialized by YCS_ADD_STRUCT with a generated field visitor.
+template <typename T> struct field_access;
+
 template <typename Field>
 inline void decode_field(const YAML::Node &parent, const char *key, const char *struct_name, Field &value) {
     using ToType = std::decay_t<Field>;
@@ -409,7 +411,7 @@ inline void decode_field(const YAML::Node &parent, const char *key, const char *
 template <typename T> inline void decode_struct(const YAML::Node &node, T &rhs, const char *struct_name) {
     const YAML::Node map = struct_node_as_map(node, struct_name);
 
-    visit_struct::for_each(rhs, [&](const char *name, auto &value) {
+    field_access<T>::for_each(rhs, [&](const char *name, auto &value) {
         using FieldType = std::decay_t<decltype(value)>;
 
         const YAML::Node field = map[name];
@@ -429,7 +431,8 @@ template <typename T> inline void decode_struct(const YAML::Node &node, T &rhs, 
 
 template <typename T> inline YAML::Node encode_struct(const T &rhs) {
     YAML::Node node(YAML::NodeType::Map);
-    visit_struct::for_each(rhs, [&](const char *name, auto &value) { node[name] = yaml_cpp_struct::to_node(value); });
+    field_access<T>::for_each(rhs,
+                              [&](const char *name, auto &value) { node[name] = yaml_cpp_struct::to_node(value); });
     return node;
 }
 
@@ -590,7 +593,7 @@ inline void collect_env_bindings(const EnvOptions &options, const EnvLookup &loo
                                  std::vector<EnvBinding> &bindings,
                                  std::unordered_map<std::string, std::string> &owners) {
     T probe{};
-    visit_struct::for_each(probe, [&](const char *name, auto &value) {
+    field_access<T>::for_each(probe, [&](const char *name, auto &value) {
         using Field = std::decay_t<decltype(value)>;
 
         const std::string child_naming = env_path_segment(naming_path, name, options);
@@ -689,27 +692,12 @@ template <typename T> inline Result<T> from_node_result(const YAML::Node &node) 
     }
 }
 
-template <typename T, bool is_file = true>
-inline Result<T> from_yaml_result(const std::string &source, const EnvOptions &options = env_options_for<T>(),
-                                  const EnvLookup &lookup = process_env()) {
-    YAML::Node node;
-    try {
-        if constexpr (is_file)
-            node = YAML::LoadFile(source);
-        else
-            node = YAML::Load(source);
-    } catch (const YAML::BadFile &) {
-        return Result<T>{
-            std::nullopt,
-            Error{ErrorCode::BadFile, {}, string_format("%s not found or broken", source.c_str()), -1, -1}};
-    } catch (const YAML::Exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
-    } catch (const std::exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
-    }
+namespace detail {
 
+template <typename T>
+inline Result<T> decode_with_env(YAML::Node &node, const EnvOptions &options, const EnvLookup &lookup) {
     try {
-        detail::apply_env_options<T>(node, options, lookup);
+        apply_env_options<T>(node, options, lookup);
     } catch (const Exception &e) {
         return Result<T>{std::nullopt, e.error()};
     } catch (const YAML::Exception &e) {
@@ -717,70 +705,17 @@ inline Result<T> from_yaml_result(const std::string &source, const EnvOptions &o
     } catch (const std::exception &e) {
         return Result<T>{std::nullopt, Error{ErrorCode::EnvParseError, {}, e.what(), -1, -1}};
     }
-
     return from_node_result<T>(node);
 }
 
-template <typename T, bool is_file = true>
-inline Result<T> from_yaml_result(const std::string &source, const EnvLookup &lookup) {
-    return from_yaml_result<T, is_file>(source, env_options_for<T>(), lookup);
-}
-
 template <typename T>
-inline Result<T> from_stream_result(std::istream &in, const EnvOptions &options = env_options_for<T>(),
-                                    const EnvLookup &lookup = process_env()) {
-    YAML::Node node;
-    try {
-        node = YAML::Load(in);
-    } catch (const YAML::Exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
-    } catch (const std::exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
-    }
-
-    try {
-        detail::apply_env_options<T>(node, options, lookup);
-    } catch (const Exception &e) {
-        return Result<T>{std::nullopt, e.error()};
-    } catch (const YAML::Exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::EnvParseError, {}, e.msg, e.mark.line, e.mark.column}};
-    } catch (const std::exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::EnvParseError, {}, e.what(), -1, -1}};
-    }
-
-    return from_node_result<T>(node);
-}
-
-template <typename T> inline Result<T> from_stream_result(std::istream &in, const EnvLookup &lookup) {
-    return from_stream_result<T>(in, env_options_for<T>(), lookup);
-}
-
-template <typename T>
-inline Result<std::vector<T>> from_yaml_all_result(const std::string &source, bool is_file = true,
-                                                   const EnvOptions &options = env_options_for<T>(),
-                                                   const EnvLookup &lookup = process_env()) {
-    std::vector<YAML::Node> nodes;
-    try {
-        if (is_file)
-            nodes = YAML::LoadAllFromFile(source);
-        else
-            nodes = YAML::LoadAll(source);
-    } catch (const YAML::BadFile &) {
-        return Result<std::vector<T>>{
-            std::nullopt,
-            Error{ErrorCode::BadFile, {}, string_format("%s not found or broken", source.c_str()), -1, -1}};
-    } catch (const YAML::Exception &e) {
-        return Result<std::vector<T>>{std::nullopt,
-                                      Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
-    } catch (const std::exception &e) {
-        return Result<std::vector<T>>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
-    }
-
+inline Result<std::vector<T>> decode_all_with_env(std::vector<YAML::Node> &nodes, const EnvOptions &options,
+                                                  const EnvLookup &lookup) {
     try {
         std::vector<T> values;
         values.reserve(nodes.size());
         for (auto &node : nodes) {
-            detail::apply_env_options<T>(node, options, lookup);
+            apply_env_options<T>(node, options, lookup);
             values.push_back(yaml_cpp_struct::node_as<T>(node));
         }
         return Result<std::vector<T>>{std::move(values), Error{}};
@@ -794,9 +729,108 @@ inline Result<std::vector<T>> from_yaml_all_result(const std::string &source, bo
     }
 }
 
+} // namespace detail
+
 template <typename T>
-inline Result<std::vector<T>> from_yaml_all_result(const std::string &source, bool is_file, const EnvLookup &lookup) {
-    return from_yaml_all_result<T>(source, is_file, env_options_for<T>(), lookup);
+inline Result<T> from_yaml_result(const std::string &file, const EnvOptions &options = env_options_for<T>(),
+                                  const EnvLookup &lookup = process_env()) {
+    YAML::Node node;
+    try {
+        node = YAML::LoadFile(file);
+    } catch (const YAML::BadFile &) {
+        return Result<T>{std::nullopt,
+                         Error{ErrorCode::BadFile, {}, string_format("%s not found or broken", file.c_str()), -1, -1}};
+    } catch (const YAML::Exception &e) {
+        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
+    } catch (const std::exception &e) {
+        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
+    }
+    return detail::decode_with_env<T>(node, options, lookup);
+}
+
+template <typename T> inline Result<T> from_yaml_result(const std::string &file, const EnvLookup &lookup) {
+    return from_yaml_result<T>(file, env_options_for<T>(), lookup);
+}
+
+template <typename T>
+inline Result<T> from_yaml_str_result(const std::string &yaml, const EnvOptions &options = env_options_for<T>(),
+                                      const EnvLookup &lookup = process_env()) {
+    YAML::Node node;
+    try {
+        node = YAML::Load(yaml);
+    } catch (const YAML::Exception &e) {
+        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
+    } catch (const std::exception &e) {
+        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
+    }
+    return detail::decode_with_env<T>(node, options, lookup);
+}
+
+template <typename T> inline Result<T> from_yaml_str_result(const std::string &yaml, const EnvLookup &lookup) {
+    return from_yaml_str_result<T>(yaml, env_options_for<T>(), lookup);
+}
+
+template <typename T>
+inline Result<T> from_stream_result(std::istream &in, const EnvOptions &options = env_options_for<T>(),
+                                    const EnvLookup &lookup = process_env()) {
+    YAML::Node node;
+    try {
+        node = YAML::Load(in);
+    } catch (const YAML::Exception &e) {
+        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
+    } catch (const std::exception &e) {
+        return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
+    }
+    return detail::decode_with_env<T>(node, options, lookup);
+}
+
+template <typename T> inline Result<T> from_stream_result(std::istream &in, const EnvLookup &lookup) {
+    return from_stream_result<T>(in, env_options_for<T>(), lookup);
+}
+
+template <typename T>
+inline Result<std::vector<T>> from_yaml_all_result(const std::string &file,
+                                                   const EnvOptions &options = env_options_for<T>(),
+                                                   const EnvLookup &lookup = process_env()) {
+    std::vector<YAML::Node> nodes;
+    try {
+        nodes = YAML::LoadAllFromFile(file);
+    } catch (const YAML::BadFile &) {
+        return Result<std::vector<T>>{
+            std::nullopt, Error{ErrorCode::BadFile, {}, string_format("%s not found or broken", file.c_str()), -1, -1}};
+    } catch (const YAML::Exception &e) {
+        return Result<std::vector<T>>{std::nullopt,
+                                      Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
+    } catch (const std::exception &e) {
+        return Result<std::vector<T>>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
+    }
+    return detail::decode_all_with_env<T>(nodes, options, lookup);
+}
+
+template <typename T>
+inline Result<std::vector<T>> from_yaml_all_result(const std::string &file, const EnvLookup &lookup) {
+    return from_yaml_all_result<T>(file, env_options_for<T>(), lookup);
+}
+
+template <typename T>
+inline Result<std::vector<T>> from_yaml_all_str_result(const std::string &yaml,
+                                                       const EnvOptions &options = env_options_for<T>(),
+                                                       const EnvLookup &lookup = process_env()) {
+    std::vector<YAML::Node> nodes;
+    try {
+        nodes = YAML::LoadAll(yaml);
+    } catch (const YAML::Exception &e) {
+        return Result<std::vector<T>>{std::nullopt,
+                                      Error{ErrorCode::ParseError, {}, e.msg, e.mark.line, e.mark.column}};
+    } catch (const std::exception &e) {
+        return Result<std::vector<T>>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
+    }
+    return detail::decode_all_with_env<T>(nodes, options, lookup);
+}
+
+template <typename T>
+inline Result<std::vector<T>> from_yaml_all_str_result(const std::string &yaml, const EnvLookup &lookup) {
+    return from_yaml_all_str_result<T>(yaml, env_options_for<T>(), lookup);
 }
 
 template <typename T>
@@ -855,9 +889,13 @@ template <typename T> inline Error to_stream(const T &obj, std::ostream &out) {
     return Error{};
 }
 
-template <typename T, bool is_file = true>
-inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string &source) {
-    auto result = from_yaml_result<T, is_file>(source);
+template <typename T> inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string &file) {
+    auto result = from_yaml_result<T>(file);
+    return std::make_tuple(std::move(result.value), format_error(result.error));
+}
+
+template <typename T> inline std::tuple<std::optional<T>, std::string> from_yaml_str(const std::string &yaml) {
+    auto result = from_yaml_str_result<T>(yaml);
     return std::make_tuple(std::move(result.value), format_error(result.error));
 }
 
@@ -1070,75 +1108,9 @@ template <typename... T> struct convert<std::variant<T...>> {
                                24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1,  \
                                0))
 
-#define YCS_PP_MAP_COMMA(m, ...)                                                                                       \
-    YCS_PP_EXPAND(YCS_PP_CONCAT(YCS_PP_MAP_COMMA_, YCS_PP_NARG(__VA_ARGS__))(m, __VA_ARGS__))
 #define YCS_PP_MAP_STMT(m, ...) YCS_PP_EXPAND(YCS_PP_CONCAT(YCS_PP_MAP_STMT_, YCS_PP_NARG(__VA_ARGS__))(m, __VA_ARGS__))
 
-#define YCS_PP_MAP_COMMA_1(m, a1) m(a1)
 #define YCS_PP_MAP_STMT_1(m, a1) m(a1)
-#define YCS_PP_MAP_COMMA_2(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_1(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_3(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_2(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_4(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_3(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_5(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_4(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_6(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_5(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_7(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_6(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_8(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_7(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_9(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_8(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_10(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_9(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_11(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_10(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_12(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_11(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_13(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_12(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_14(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_13(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_15(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_14(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_16(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_15(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_17(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_16(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_18(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_17(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_19(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_18(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_20(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_19(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_21(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_20(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_22(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_21(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_23(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_22(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_24(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_23(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_25(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_24(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_26(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_25(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_27(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_26(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_28(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_27(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_29(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_28(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_30(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_29(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_31(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_30(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_32(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_31(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_33(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_32(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_34(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_33(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_35(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_34(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_36(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_35(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_37(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_36(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_38(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_37(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_39(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_38(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_40(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_39(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_41(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_40(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_42(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_41(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_43(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_42(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_44(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_43(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_45(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_44(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_46(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_45(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_47(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_46(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_48(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_47(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_49(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_48(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_50(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_49(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_51(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_50(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_52(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_51(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_53(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_52(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_54(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_53(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_55(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_54(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_56(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_55(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_57(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_56(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_58(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_57(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_59(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_58(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_60(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_59(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_61(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_60(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_62(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_61(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_63(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_62(m, __VA_ARGS__)
-#define YCS_PP_MAP_COMMA_64(m, a1, ...) m(a1), YCS_PP_MAP_COMMA_63(m, __VA_ARGS__)
 #define YCS_PP_MAP_STMT_2(m, a1, ...) m(a1) YCS_PP_MAP_STMT_1(m, __VA_ARGS__)
 #define YCS_PP_MAP_STMT_3(m, a1, ...) m(a1) YCS_PP_MAP_STMT_2(m, __VA_ARGS__)
 #define YCS_PP_MAP_STMT_4(m, a1, ...) m(a1) YCS_PP_MAP_STMT_3(m, __VA_ARGS__)
@@ -1216,11 +1188,6 @@ template <typename... T> struct convert<std::variant<T...>> {
 #define YCS_ENV(field, env_name) (env, field, env_name)
 #define YCS_ENV_OPT(field, env_name, ...) (env_opt, field, env_name, __VA_ARGS__)
 
-#define YCS_FIELD_NAME(x) YCS_PP_CONCAT(YCS_FIELD_NAME_, YCS_PP_IS_PAREN(x))(x)
-#define YCS_FIELD_NAME_0(x) x
-#define YCS_FIELD_NAME_1(x) YCS_FIELD_NAME_KIND x
-#define YCS_FIELD_NAME_KIND(kind, field, ...) field
-
 #define YCS_DEFAULT_STMT(x) YCS_PP_CONCAT(YCS_DEFAULT_STMT_, YCS_PP_IS_PAREN(x))(x)
 #define YCS_DEFAULT_STMT_0(x)
 #define YCS_DEFAULT_STMT_1(x) YCS_DEFAULT_STMT_KIND x
@@ -1249,8 +1216,12 @@ template <typename... T> struct convert<std::variant<T...>> {
     if (std::string_view(member_name) == #field)                                                                       \
         return env_name;
 
+#define YCS_VISIT_STMT(x) YCS_PP_CONCAT(YCS_VISIT_STMT_, YCS_PP_IS_PAREN(x))(x)
+#define YCS_VISIT_STMT_0(x) f(#x, obj.x);
+#define YCS_VISIT_STMT_1(x) YCS_VISIT_STMT_KIND x
+#define YCS_VISIT_STMT_KIND(kind, field, ...) f(#field, obj.field);
+
 #define YCS_ADD_STRUCT(T, ...)                                                                                         \
-    VISITABLE_STRUCT(T, YCS_PP_MAP_COMMA(YCS_FIELD_NAME, __VA_ARGS__));                                                \
     namespace YAML {                                                                                                   \
     template <> struct convert<T> {                                                                                    \
         template <typename U = T> static bool decode(const Node &node, T &rhs) {                                       \
@@ -1265,6 +1236,12 @@ template <typename... T> struct convert<std::variant<T...>> {
     namespace yaml_cpp_struct {                                                                                        \
     template <> inline constexpr bool is_yaml_struct<T> = true;                                                        \
     namespace detail {                                                                                                 \
+    template <> struct field_access<T> {                                                                               \
+        template <typename F> static void for_each(T &obj, F &&f) { YCS_PP_MAP_STMT(YCS_VISIT_STMT, __VA_ARGS__) }     \
+        template <typename F> static void for_each(const T &obj, F &&f) {                                              \
+            YCS_PP_MAP_STMT(YCS_VISIT_STMT, __VA_ARGS__)                                                               \
+        }                                                                                                              \
+    };                                                                                                                 \
     template <> struct field_policies<T> {                                                                             \
         static bool apply_default([[maybe_unused]] const char *name, [[maybe_unused]] T &obj) {                        \
             YCS_PP_MAP_STMT(YCS_DEFAULT_STMT, __VA_ARGS__)                                                             \

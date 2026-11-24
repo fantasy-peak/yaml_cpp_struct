@@ -31,8 +31,7 @@ find_package(Threads REQUIRED)
 function(ycs_add_test target source)
     add_executable(${target} ${source})
     target_include_directories(${target} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../include
-        ${visit_struct_SOURCE_DIR}/include)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include)
     target_link_libraries(${target} PRIVATE
         yaml-cpp
         magic_enum
