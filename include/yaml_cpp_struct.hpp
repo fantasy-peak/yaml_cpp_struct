@@ -45,6 +45,7 @@ namespace yaml_cpp_struct {
 inline nlohmann::json parse_scalar(const YAML::Node &node) {
     int i;
     long long ll;
+    unsigned long long ull;
     double d;
     bool b;
     std::string s;
@@ -53,6 +54,8 @@ inline nlohmann::json parse_scalar(const YAML::Node &node) {
         return i;
     if (YAML::convert<long long>::decode(node, ll))
         return ll;
+    if (YAML::convert<unsigned long long>::decode(node, ull))
+        return ull;
     if (YAML::convert<double>::decode(node, d))
         return d;
     if (YAML::convert<bool>::decode(node, b))
@@ -214,13 +217,6 @@ template <typename T> inline EnvOptions env_options_for() {
     EnvOptions options;
     options.prefix = std::string(env_prefix<T>);
     options.enabled = !options.prefix.empty();
-    return options;
-}
-
-template <typename T> inline EnvOptions env_only_options_for() {
-    EnvOptions options;
-    options.prefix = std::string(env_prefix<T>);
-    options.enabled = true;
     return options;
 }
 
@@ -834,24 +830,14 @@ inline Result<std::vector<T>> from_yaml_all_str_result(const std::string &yaml, 
 }
 
 template <typename T>
-inline Result<T> from_env_result(const EnvOptions &options = env_only_options_for<T>(),
+inline Result<T> from_env_result(const EnvOptions &options = env_options_for<T>(),
                                  const EnvLookup &lookup = process_env()) {
     YAML::Node node(YAML::NodeType::Map);
-    try {
-        detail::apply_env_options<T>(node, options, lookup);
-    } catch (const Exception &e) {
-        return Result<T>{std::nullopt, e.error()};
-    } catch (const YAML::Exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::EnvParseError, {}, e.msg, e.mark.line, e.mark.column}};
-    } catch (const std::exception &e) {
-        return Result<T>{std::nullopt, Error{ErrorCode::EnvParseError, {}, e.what(), -1, -1}};
-    }
-
-    return from_node_result<T>(node);
+    return detail::decode_with_env<T>(node, options, lookup);
 }
 
 template <typename T> inline Result<T> from_env_result(const EnvLookup &lookup) {
-    return from_env_result<T>(env_only_options_for<T>(), lookup);
+    return from_env_result<T>(env_options_for<T>(), lookup);
 }
 
 template <typename T> inline Result<YAML::Node> to_node_result(const T &obj) {
@@ -1006,6 +992,136 @@ template <typename T, typename A> struct convert<std::forward_list<T, A>> {
         Node node(NodeType::Sequence);
         for (auto &it : rhs)
             node.push_back(yaml_cpp_struct::to_node(it));
+        return node;
+    }
+};
+
+namespace ycs_detail {
+
+template <typename Container> inline bool decode_numeric_sequence(const Node &node, Container &rhs) {
+    if (!node.IsSequence())
+        return false;
+    rhs.clear();
+    for (auto &it : node)
+        rhs.push_back(yaml_cpp_struct::node_as<typename Container::value_type>(it));
+    return true;
+}
+
+template <typename Container> inline Node encode_numeric_sequence(const Container &rhs) {
+    Node node(NodeType::Sequence);
+    for (auto &it : rhs)
+        node.push_back(yaml_cpp_struct::to_node(it));
+    return node;
+}
+
+} // namespace ycs_detail
+
+// yaml-cpp's native container conversions encode (signed/unsigned) char as a
+// character.  Override the 8-bit cases so they stay numeric.
+template <typename A> struct convert<std::vector<uint8_t, A>> {
+    static bool decode(const Node &node, std::vector<uint8_t, A> &rhs) {
+        return ycs_detail::decode_numeric_sequence(node, rhs);
+    }
+    static Node encode(const std::vector<uint8_t, A> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <typename A> struct convert<std::vector<int8_t, A>> {
+    static bool decode(const Node &node, std::vector<int8_t, A> &rhs) {
+        return ycs_detail::decode_numeric_sequence(node, rhs);
+    }
+    static Node encode(const std::vector<int8_t, A> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <typename A> struct convert<std::list<uint8_t, A>> {
+    static bool decode(const Node &node, std::list<uint8_t, A> &rhs) {
+        return ycs_detail::decode_numeric_sequence(node, rhs);
+    }
+    static Node encode(const std::list<uint8_t, A> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <typename A> struct convert<std::list<int8_t, A>> {
+    static bool decode(const Node &node, std::list<int8_t, A> &rhs) {
+        return ycs_detail::decode_numeric_sequence(node, rhs);
+    }
+    static Node encode(const std::list<int8_t, A> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <std::size_t N> struct convert<std::array<uint8_t, N>> {
+    static bool decode(const Node &node, std::array<uint8_t, N> &rhs) {
+        if (!node.IsSequence() || node.size() != N)
+            return false;
+        for (std::size_t i = 0; i < N; ++i)
+            rhs[i] = yaml_cpp_struct::node_as<uint8_t>(node[i]);
+        return true;
+    }
+    static Node encode(const std::array<uint8_t, N> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <std::size_t N> struct convert<std::array<int8_t, N>> {
+    static bool decode(const Node &node, std::array<int8_t, N> &rhs) {
+        if (!node.IsSequence() || node.size() != N)
+            return false;
+        for (std::size_t i = 0; i < N; ++i)
+            rhs[i] = yaml_cpp_struct::node_as<int8_t>(node[i]);
+        return true;
+    }
+    static Node encode(const std::array<int8_t, N> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <> struct convert<std::valarray<uint8_t>> {
+    static bool decode(const Node &node, std::valarray<uint8_t> &rhs) {
+        if (!node.IsSequence())
+            return false;
+        rhs.resize(node.size());
+        for (std::size_t i = 0; i < node.size(); ++i)
+            rhs[i] = yaml_cpp_struct::node_as<uint8_t>(node[i]);
+        return true;
+    }
+    static Node encode(const std::valarray<uint8_t> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <> struct convert<std::valarray<int8_t>> {
+    static bool decode(const Node &node, std::valarray<int8_t> &rhs) {
+        if (!node.IsSequence())
+            return false;
+        rhs.resize(node.size());
+        for (std::size_t i = 0; i < node.size(); ++i)
+            rhs[i] = yaml_cpp_struct::node_as<int8_t>(node[i]);
+        return true;
+    }
+    static Node encode(const std::valarray<int8_t> &rhs) { return ycs_detail::encode_numeric_sequence(rhs); }
+};
+
+template <typename K, typename C, typename A> struct convert<std::map<K, uint8_t, C, A>> {
+    static bool decode(const Node &node, std::map<K, uint8_t, C, A> &rhs) {
+        if (!node.IsMap())
+            return false;
+        rhs.clear();
+        for (auto &it : node)
+            rhs.emplace(it.first.template as<K>(), yaml_cpp_struct::node_as<uint8_t>(it.second));
+        return true;
+    }
+    static Node encode(const std::map<K, uint8_t, C, A> &rhs) {
+        Node node(NodeType::Map);
+        for (auto &[k, v] : rhs)
+            node.force_insert(yaml_cpp_struct::to_node(k), yaml_cpp_struct::to_node(v));
+        return node;
+    }
+};
+
+template <typename K, typename C, typename A> struct convert<std::map<K, int8_t, C, A>> {
+    static bool decode(const Node &node, std::map<K, int8_t, C, A> &rhs) {
+        if (!node.IsMap())
+            return false;
+        rhs.clear();
+        for (auto &it : node)
+            rhs.emplace(it.first.template as<K>(), yaml_cpp_struct::node_as<int8_t>(it.second));
+        return true;
+    }
+    static Node encode(const std::map<K, int8_t, C, A> &rhs) {
+        Node node(NodeType::Map);
+        for (auto &[k, v] : rhs)
+            node.force_insert(yaml_cpp_struct::to_node(k), yaml_cpp_struct::to_node(v));
         return node;
     }
 };

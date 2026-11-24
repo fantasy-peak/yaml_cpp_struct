@@ -39,6 +39,12 @@ yaml_cpp_struct::EnvLookup make_env(std::map<std::string, std::string, std::less
     };
 }
 
+yaml_cpp_struct::EnvOptions explicit_env_options() {
+    yaml_cpp_struct::EnvOptions options;
+    options.enabled = true;
+    return options;
+}
+
 } // namespace
 
 enum class Color : uint8_t {
@@ -239,6 +245,16 @@ struct NestedContainers {
     std::vector<std::optional<int>> maybe_values;
 };
 YCS_ADD_STRUCT(NestedContainers, groups, maybe_values)
+
+struct U8Containers {
+    std::vector<uint8_t> bytes;
+    std::list<uint8_t> listed;
+    std::array<uint8_t, 3> fixed{};
+    std::map<std::string, uint8_t> mapped;
+    std::valarray<uint8_t> values;
+    std::vector<int8_t> signed_bytes;
+};
+YCS_ADD_STRUCT(U8Containers, bytes, listed, fixed, mapped, values, signed_bytes)
 
 namespace {
 
@@ -545,13 +561,14 @@ TEST(YamlCppStruct, EnvListSeparator) {
 }
 
 TEST(YamlCppStruct, ExplicitEnvNames) {
-    const auto defaulted = yaml_cpp_struct::from_env_result<ExplicitEnv>(make_env({{"CUSTOM_PORT", "8080"}}));
+    const auto defaulted =
+        yaml_cpp_struct::from_env_result<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}}));
     ASSERT_TRUE(defaulted.value.has_value()) << yaml_cpp_struct::format_error(defaulted.error);
     EXPECT_EQ(defaulted.value->port, 8080);
     EXPECT_EQ(defaulted.value->timeout, 30);
 
-    const auto explicit_timeout =
-        yaml_cpp_struct::from_env_result<ExplicitEnv>(make_env({{"CUSTOM_PORT", "8080"}, {"CUSTOM_TIMEOUT", "60"}}));
+    const auto explicit_timeout = yaml_cpp_struct::from_env_result<ExplicitEnv>(
+        explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}, {"CUSTOM_TIMEOUT", "60"}}));
     ASSERT_TRUE(explicit_timeout.value.has_value()) << yaml_cpp_struct::format_error(explicit_timeout.error);
     EXPECT_EQ(explicit_timeout.value->port, 8080);
     EXPECT_EQ(explicit_timeout.value->timeout, 60);
@@ -559,20 +576,32 @@ TEST(YamlCppStruct, ExplicitEnvNames) {
 
 TEST(YamlCppStruct, ExplicitNestedEnvName) {
     const auto nested = yaml_cpp_struct::from_env_result<ExplicitNested>(
-        make_env({{"CUSTOM_INNER__VALUE", "42"}, {"CUSTOM_INNER__LABEL", "nested"}}));
+        explicit_env_options(), make_env({{"CUSTOM_INNER__VALUE", "42"}, {"CUSTOM_INNER__LABEL", "nested"}}));
     ASSERT_TRUE(nested.value.has_value()) << yaml_cpp_struct::format_error(nested.error);
     EXPECT_EQ(nested.value->inner.value, 42);
     EXPECT_EQ(nested.value->inner.label, std::string("nested"));
 
-    const auto whole =
-        yaml_cpp_struct::from_env_result<ExplicitNested>(make_env({{"CUSTOM_INNER", "{value: 7, label: whole}"}}));
+    const auto whole = yaml_cpp_struct::from_env_result<ExplicitNested>(
+        explicit_env_options(), make_env({{"CUSTOM_INNER", "{value: 7, label: whole}"}}));
     ASSERT_TRUE(whole.value.has_value()) << yaml_cpp_struct::format_error(whole.error);
     EXPECT_EQ(whole.value->inner.value, 7);
     EXPECT_EQ(whole.value->inner.label, std::string("whole"));
 }
 
+TEST(YamlCppStruct, FromEnvRequiresPrefixOrOptIn) {
+    const auto disabled = yaml_cpp_struct::from_env_result<NoPrefix>(make_env({{"PORT", "9"}}));
+    ASSERT_TRUE(disabled.value.has_value()) << yaml_cpp_struct::format_error(disabled.error);
+    EXPECT_EQ(disabled.value->port, 7);
+
+    const auto opt_in =
+        yaml_cpp_struct::from_env_result<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}}));
+    ASSERT_TRUE(opt_in.value.has_value()) << yaml_cpp_struct::format_error(opt_in.error);
+    EXPECT_EQ(opt_in.value->port, 8080);
+}
+
 TEST(YamlCppStruct, EnvErrors) {
-    const auto duplicate = yaml_cpp_struct::from_env_result<DuplicateEnv>(make_env({{"SAME_ENV", "1"}}));
+    const auto duplicate =
+        yaml_cpp_struct::from_env_result<DuplicateEnv>(explicit_env_options(), make_env({{"SAME_ENV", "1"}}));
     EXPECT_FALSE(duplicate.value.has_value());
     EXPECT_EQ(duplicate.error.code, yaml_cpp_struct::ErrorCode::EnvDuplicate);
 
@@ -702,7 +731,8 @@ TEST(YamlCppStruct, WholeNestedEnvWins) {
 }
 
 TEST(YamlCppStruct, EnvErrorMetadata) {
-    const auto duplicate = yaml_cpp_struct::from_env_result<DuplicateEnv>(make_env({{"SAME_ENV", "1"}}));
+    const auto duplicate =
+        yaml_cpp_struct::from_env_result<DuplicateEnv>(explicit_env_options(), make_env({{"SAME_ENV", "1"}}));
     EXPECT_EQ(duplicate.error.code, yaml_cpp_struct::ErrorCode::EnvDuplicate);
     EXPECT_EQ(duplicate.error.env_name, std::string("SAME_ENV"));
     EXPECT_FALSE(duplicate.error.path.empty());
@@ -738,6 +768,10 @@ big: 10000000000
     EXPECT_EQ(j["num"], 1.5);
     EXPECT_TRUE(j["big"].is_number_integer());
     EXPECT_EQ(j["big"].get<long long>(), 10000000000LL);
+
+    const auto big_unsigned = yaml_cpp_struct::yaml_to_json("big: 18446744073709551615\n");
+    EXPECT_TRUE(big_unsigned["big"].is_number_unsigned());
+    EXPECT_EQ(big_unsigned["big"].get<unsigned long long>(), 18446744073709551615ULL);
 
     const auto list = yaml_cpp_struct::yaml_to_json("- 1\n- 2\n");
     ASSERT_TRUE(list.is_array());
@@ -1172,4 +1206,33 @@ TEST(YamlCppStruct, NestedContainers) {
     ASSERT_TRUE(round_trip.has_value()) << parse_error;
     EXPECT_EQ(round_trip->groups, cfg->groups);
     EXPECT_EQ(round_trip->maybe_values, cfg->maybe_values);
+}
+
+TEST(YamlCppStruct, EightBitContainersEncodeAsNumbers) {
+    U8Containers input;
+    input.bytes = {1, 65};
+    input.listed = {2, 66};
+    input.fixed = {{3, 67, 255}};
+    input.mapped = {{"a", 65}};
+    input.values = std::valarray<uint8_t>{4, 68};
+    input.signed_bytes = {-1, 65};
+
+    const auto [encoded, error] = yaml_cpp_struct::to_yaml(input);
+    ASSERT_TRUE(encoded.has_value()) << error;
+    EXPECT_NE(encoded->find("- 65"), std::string::npos);
+    EXPECT_NE(encoded->find("- 255"), std::string::npos);
+    EXPECT_NE(encoded->find("- -1"), std::string::npos);
+    EXPECT_EQ(encoded->find("\"\\x01\""), std::string::npos);
+    EXPECT_EQ(encoded->find("a: A"), std::string::npos);
+
+    const auto [decoded, parse_error] = yaml_cpp_struct::from_yaml_str<U8Containers>(*encoded);
+    ASSERT_TRUE(decoded.has_value()) << parse_error;
+    EXPECT_EQ(decoded->bytes, input.bytes);
+    EXPECT_EQ(decoded->listed, input.listed);
+    EXPECT_EQ(decoded->fixed, input.fixed);
+    EXPECT_EQ(decoded->mapped, input.mapped);
+    ASSERT_EQ(decoded->values.size(), input.values.size());
+    for (std::size_t i = 0; i < input.values.size(); ++i)
+        EXPECT_EQ(decoded->values[i], input.values[i]);
+    EXPECT_EQ(decoded->signed_bytes, input.signed_bytes);
 }

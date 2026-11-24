@@ -279,9 +279,20 @@ but not the value.
 Environment variables are only read when a prefix is declared (or an explicit
 `EnvOptions` is passed), so unrelated process variables are never scanned.
 
+`from_env_result` follows the same rule: without a declared prefix it does not
+scan bare variables. For a struct that only uses explicit `YCS_ENV(...)` names,
+pass `EnvOptions{.enabled = true}` explicitly:
+
+```cpp
+yaml_cpp_struct::EnvOptions options;
+options.enabled = true;
+auto result = yaml_cpp_struct::from_env_result<Config>(options);
+```
+
 `from_node_result` is the low-level Node decoder and does not apply environment
-variables. `from_yaml_result`, `from_stream_result`, `from_yaml_all_result` and
-`from_env_result` do; the `from_yaml` convenience wrapper also does.
+variables. `from_yaml_result`, `from_yaml_str_result`, `from_stream_result`,
+`from_yaml_all_result`, `from_yaml_all_str_result` and `from_env_result` do; the
+`from_yaml` convenience wrapper also does.
 
 ## Enums
 
