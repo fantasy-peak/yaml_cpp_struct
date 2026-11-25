@@ -211,8 +211,84 @@ struct EnvOptions {
 // Set by YCS_ENV_PREFIX(T, "APP_").
 template <typename T> inline constexpr std::string_view env_prefix = {};
 
-// Set by YCS_ADD_STRUCT.
-template <typename T> inline constexpr bool is_yaml_struct = false;
+namespace detail {
+
+// YCS_DEFINE inside a struct injects this tag so the rest of the library can
+// recognize the type without a namespace-scope YCS_ADD_STRUCT specialization.
+template <typename T, typename = void> struct has_ycs_define : std::false_type {};
+
+template <typename T> struct has_ycs_define<T, std::void_t<typename T::ycs_is_yaml_struct>> : std::true_type {};
+
+template <typename T> struct is_std_vector : std::false_type {};
+
+template <typename T, typename A> struct is_std_vector<std::vector<T, A>> : std::true_type {};
+
+template <typename T> struct is_std_array : std::false_type {};
+
+template <typename T, std::size_t N> struct is_std_array<std::array<T, N>> : std::true_type {};
+
+template <typename T> struct is_std_list : std::false_type {};
+
+template <typename T, typename A> struct is_std_list<std::list<T, A>> : std::true_type {};
+
+template <typename T> struct is_std_map : std::false_type {};
+
+template <typename K, typename V, typename C, typename A> struct is_std_map<std::map<K, V, C, A>> : std::true_type {};
+
+template <typename T> struct is_std_unordered_map : std::false_type {};
+
+template <typename K, typename V, typename H, typename P, typename A>
+struct is_std_unordered_map<std::unordered_map<K, V, H, P, A>> : std::true_type {};
+
+// Used in diagnostics.  YCS_ADD_STRUCT overrides it with the concrete type
+// name; YCS_DEFINE cannot see its own name from inside the class.
+template <typename T> struct struct_name {
+    static constexpr const char *value = "struct";
+};
+
+} // namespace detail
+
+// Set by YCS_ADD_STRUCT or detected from YCS_DEFINE.
+template <typename T> inline constexpr bool is_yaml_struct = detail::has_ycs_define<T>::value;
+
+namespace detail {
+
+// True when decoding the type needs yaml_cpp_struct::node_as (because a YAML
+// struct appears somewhere inside), instead of yaml-cpp's built-in convert<T>.
+template <typename T> struct needs_struct_aware : std::bool_constant<is_yaml_struct<T>> {};
+
+template <typename T> struct needs_struct_aware<std::optional<T>> : needs_struct_aware<T> {};
+
+template <typename... T>
+struct needs_struct_aware<std::tuple<T...>> : std::bool_constant<(needs_struct_aware<T>::value || ...)> {};
+
+template <typename... T>
+struct needs_struct_aware<std::variant<T...>> : std::bool_constant<(needs_struct_aware<T>::value || ...)> {};
+
+template <typename T, typename A> struct needs_struct_aware<std::vector<T, A>> : needs_struct_aware<T> {};
+
+template <typename T, typename A> struct needs_struct_aware<std::list<T, A>> : needs_struct_aware<T> {};
+
+template <typename T, typename A> struct needs_struct_aware<std::deque<T, A>> : needs_struct_aware<T> {};
+
+template <typename T, typename A> struct needs_struct_aware<std::forward_list<T, A>> : needs_struct_aware<T> {};
+
+template <typename T, typename C, typename A> struct needs_struct_aware<std::set<T, C, A>> : needs_struct_aware<T> {};
+
+template <typename T, typename H, typename P, typename A>
+struct needs_struct_aware<std::unordered_set<T, H, P, A>> : needs_struct_aware<T> {};
+
+template <typename T, std::size_t N> struct needs_struct_aware<std::array<T, N>> : needs_struct_aware<T> {};
+
+template <typename K, typename V, typename C, typename A>
+struct needs_struct_aware<std::map<K, V, C, A>>
+    : std::bool_constant<needs_struct_aware<K>::value || needs_struct_aware<V>::value> {};
+
+template <typename K, typename V, typename H, typename P, typename A>
+struct needs_struct_aware<std::unordered_map<K, V, H, P, A>>
+    : std::bool_constant<needs_struct_aware<K>::value || needs_struct_aware<V>::value> {};
+
+} // namespace detail
 
 template <typename T> inline EnvOptions env_options_for() {
     EnvOptions options;
@@ -308,6 +384,12 @@ template <typename T> inline std::remove_cv_t<std::remove_reference_t<T>> node_a
     }
 }
 
+template <typename T> inline void decode_struct(const YAML::Node &node, T &rhs, const char *struct_name);
+
+template <typename T> inline YAML::Node encode_struct(const T &rhs);
+
+template <typename T> inline T node_as_dispatch(const YAML::Node &node);
+
 } // namespace detail
 
 template <typename T> inline std::remove_cv_t<std::remove_reference_t<T>> node_as(const YAML::Node &node) {
@@ -315,27 +397,94 @@ template <typename T> inline std::remove_cv_t<std::remove_reference_t<T>> node_a
     static_assert(!detail::contains_string_view<U>::value,
                   "std::string_view fields are not supported because the view would dangle; use std::string");
 
-    // An empty document produces a null node without an underlying node, and
-    // yaml-cpp's as<T>() rejects it before reaching convert<T>::decode().
-    // Materialize the null node so structs can apply their field policies.
-    if (node.IsDefined() && node.Type() == YAML::NodeType::Null)
-        return detail::node_as_value<T>(YAML::Node(YAML::NodeType::Null));
-    return detail::node_as_value<T>(node);
+    return detail::node_as_dispatch<U>(node);
+}
+
+namespace detail {
+
+// Structs defined with YCS_DEFINE have no YAML::convert specialization, so
+// route them (and containers that hold them) through the library decoders
+// instead of yaml-cpp's as<T>().  Everything else keeps the old behaviour.
+template <typename U> inline U node_as_dispatch(const YAML::Node &node) {
+    if constexpr (is_yaml_struct<U>) {
+        U value{};
+        decode_struct(node, value, struct_name<U>::value);
+        return value;
+    } else if constexpr (is_std_vector<U>::value && needs_struct_aware<U>::value) {
+        if (!node.IsSequence())
+            throw YAML::TypedBadConversion<U>(safe_mark(node));
+        U result;
+        result.reserve(node.size());
+        for (const auto &element : node)
+            result.push_back(yaml_cpp_struct::node_as<typename U::value_type>(element));
+        return result;
+    } else if constexpr (is_std_list<U>::value && needs_struct_aware<U>::value) {
+        if (!node.IsSequence())
+            throw YAML::TypedBadConversion<U>(safe_mark(node));
+        U result;
+        for (const auto &element : node)
+            result.push_back(yaml_cpp_struct::node_as<typename U::value_type>(element));
+        return result;
+    } else if constexpr (is_std_array<U>::value && needs_struct_aware<U>::value) {
+        constexpr std::size_t size = std::tuple_size<U>::value;
+        if (!node.IsSequence() || node.size() != size)
+            throw YAML::TypedBadConversion<U>(safe_mark(node));
+        U result{};
+        for (std::size_t i = 0; i < size; ++i)
+            result[i] = yaml_cpp_struct::node_as<typename U::value_type>(node[i]);
+        return result;
+    } else if constexpr ((is_std_map<U>::value || is_std_unordered_map<U>::value) && needs_struct_aware<U>::value) {
+        if (!node.IsMap())
+            throw YAML::TypedBadConversion<U>(safe_mark(node));
+        U result;
+        for (const auto &entry : node)
+            result.emplace(yaml_cpp_struct::node_as<typename U::key_type>(entry.first),
+                           yaml_cpp_struct::node_as<typename U::mapped_type>(entry.second));
+        return result;
+    } else {
+        // An empty document produces a null node without an underlying node,
+        // and yaml-cpp's as<T>() rejects it before reaching convert<T>::decode().
+        // Materialize the null node so convert<T> can handle it.
+        if (node.IsDefined() && node.Type() == YAML::NodeType::Null)
+            return node_as_value<U>(YAML::Node(YAML::NodeType::Null));
+        return node_as_value<U>(node);
+    }
 }
 
 // yaml-cpp encodes (signed/unsigned) char by streaming the raw character,
 // which is not what users expect for 8-bit integer fields.  Encode them as
 // numbers instead.
-namespace detail {
-
 template <typename T> inline YAML::Node to_node_impl(const T &v) {
     using U = std::remove_cv_t<std::remove_reference_t<T>>;
-    if constexpr (std::is_same_v<U, uint8_t>)
+    if constexpr (std::is_same_v<U, uint8_t>) {
         return YAML::Node(static_cast<uint32_t>(v));
-    else if constexpr (std::is_same_v<U, int8_t>)
+    } else if constexpr (std::is_same_v<U, int8_t>) {
         return YAML::Node(static_cast<int32_t>(v));
-    else
+    } else if constexpr (is_yaml_struct<U>) {
+        return encode_struct<U>(v);
+    } else if constexpr (is_std_vector<U>::value && needs_struct_aware<U>::value) {
+        YAML::Node node(YAML::NodeType::Sequence);
+        for (const auto &element : v)
+            node.push_back(to_node_impl(element));
+        return node;
+    } else if constexpr (is_std_list<U>::value && needs_struct_aware<U>::value) {
+        YAML::Node node(YAML::NodeType::Sequence);
+        for (const auto &element : v)
+            node.push_back(to_node_impl(element));
+        return node;
+    } else if constexpr (is_std_array<U>::value && needs_struct_aware<U>::value) {
+        YAML::Node node(YAML::NodeType::Sequence);
+        for (const auto &element : v)
+            node.push_back(to_node_impl(element));
+        return node;
+    } else if constexpr ((is_std_map<U>::value || is_std_unordered_map<U>::value) && needs_struct_aware<U>::value) {
+        YAML::Node node(YAML::NodeType::Map);
+        for (const auto &[key, value] : v)
+            node.force_insert(to_node_impl(key), to_node_impl(value));
+        return node;
+    } else {
         return YAML::Node(v);
+    }
 }
 
 } // namespace detail
@@ -354,12 +503,12 @@ inline YAML::Node tuple_to_yaml_node(const std::tuple<T...> &tup, std::index_seq
 
 namespace detail {
 
-// Primary template; the annotated YCS_ADD_STRUCT specialization overrides it
-// with the default-value applier generated from YCS_OPT(...).
+// Primary template; YCS_ADD_STRUCT specializes it, while YCS_DEFINE provides
+// the same information as members of the struct itself.
 template <typename T> struct field_policies {
-    static bool apply_default([[maybe_unused]] const char *, [[maybe_unused]] T &) { return false; }
+    static bool apply_default(const char *name, T &obj) { return obj.ycs_apply_default(name); }
 
-    static const char *env_name(const char *) { return nullptr; }
+    static const char *env_name(const char *member_name) { return T::ycs_env_name(member_name); }
 };
 
 inline YAML::Node struct_node_as_map(const YAML::Node &node, const char *struct_name) {
@@ -382,8 +531,13 @@ inline Exception missing_field_error(const char *key, const char *struct_name, c
                            mark.line, mark.column});
 }
 
-// Specialized by YCS_ADD_STRUCT with a generated field visitor.
-template <typename T> struct field_access;
+// YCS_ADD_STRUCT specializes this with a generated field visitor; YCS_DEFINE
+// structs expose the same visitor as a member instead.
+template <typename T> struct field_access {
+    template <typename F> static void for_each(T &obj, F &&f) { obj.ycs_visit(f); }
+
+    template <typename F> static void for_each(const T &obj, F &&f) { obj.ycs_visit(f); }
+};
 
 template <typename Field>
 inline void decode_field(const YAML::Node &parent, const char *key, const char *struct_name, Field &value) {
@@ -1281,6 +1435,56 @@ template <typename... T> struct convert<std::variant<T...>> {
 #define YCS_VISIT_STMT_1(x) YCS_VISIT_STMT_KIND x
 #define YCS_VISIT_STMT_KIND(kind, field, ...) f(#field, obj.field);
 
+#define YCS_VISIT_MEMBER_STMT(x) YCS_PP_CONCAT(YCS_VISIT_MEMBER_STMT_, YCS_PP_IS_PAREN(x))(x)
+#define YCS_VISIT_MEMBER_STMT_0(x) ycs_f_(#x, x);
+#define YCS_VISIT_MEMBER_STMT_1(x) YCS_VISIT_MEMBER_STMT_KIND x
+#define YCS_VISIT_MEMBER_STMT_KIND(kind, field, ...) ycs_f_(#field, field);
+
+#define YCS_DEFAULT_MEMBER_STMT(x) YCS_PP_CONCAT(YCS_DEFAULT_MEMBER_STMT_, YCS_PP_IS_PAREN(x))(x)
+#define YCS_DEFAULT_MEMBER_STMT_0(x)
+#define YCS_DEFAULT_MEMBER_STMT_1(x) YCS_DEFAULT_MEMBER_STMT_KIND x
+#define YCS_DEFAULT_MEMBER_STMT_KIND(kind, field, ...) YCS_DEFAULT_MEMBER_STMT_KIND_##kind(field, __VA_ARGS__)
+#define YCS_DEFAULT_MEMBER_STMT_KIND_opt(field, ...)                                                                   \
+    if (std::string_view(ycs_name_) == #field) {                                                                       \
+        field = __VA_ARGS__;                                                                                           \
+        return true;                                                                                                   \
+    }
+#define YCS_DEFAULT_MEMBER_STMT_KIND_env(field, env_name)
+#define YCS_DEFAULT_MEMBER_STMT_KIND_env_opt(field, env_name, ...)                                                     \
+    if (std::string_view(ycs_name_) == #field) {                                                                       \
+        field = __VA_ARGS__;                                                                                           \
+        return true;                                                                                                   \
+    }
+
+// In-class equivalent of YCS_ADD_STRUCT.  Place it at the end of the struct,
+// optionally in a private section.  The same field annotations are accepted:
+//
+//   struct Config {
+//       std::string host;
+//       int port;
+//       bool debug;
+//       YCS_DEFINE(host, port, YCS_OPT(debug, false))
+//   };
+#define YCS_DEFINE(...)                                                                                                \
+    struct ycs_is_yaml_struct {};                                                                                      \
+    template <typename YCS_Visitor> void ycs_visit(YCS_Visitor &&ycs_f_) {                                             \
+        YCS_PP_MAP_STMT(YCS_VISIT_MEMBER_STMT, __VA_ARGS__)                                                            \
+    }                                                                                                                  \
+    template <typename YCS_Visitor> void ycs_visit(YCS_Visitor &&ycs_f_) const {                                       \
+        YCS_PP_MAP_STMT(YCS_VISIT_MEMBER_STMT, __VA_ARGS__)                                                            \
+    }                                                                                                                  \
+    bool ycs_apply_default([[maybe_unused]] const char *ycs_name_) {                                                   \
+        YCS_PP_MAP_STMT(YCS_DEFAULT_MEMBER_STMT, __VA_ARGS__)                                                          \
+        return false;                                                                                                  \
+    }                                                                                                                  \
+    static const char *ycs_env_name([[maybe_unused]] const char *member_name) {                                        \
+        YCS_PP_MAP_STMT(YCS_ENV_NAME_STMT, __VA_ARGS__)                                                                \
+        return nullptr;                                                                                                \
+    }                                                                                                                  \
+    template <typename YCS_U> friend struct ::yaml_cpp_struct::detail::field_access;                                   \
+    template <typename YCS_U> friend struct ::yaml_cpp_struct::detail::field_policies;                                 \
+    template <typename, typename> friend struct ::yaml_cpp_struct::detail::has_ycs_define;
+
 #define YCS_ADD_STRUCT(T, ...)                                                                                         \
     namespace YAML {                                                                                                   \
     template <> struct convert<T> {                                                                                    \
@@ -1296,6 +1500,9 @@ template <typename... T> struct convert<std::variant<T...>> {
     namespace yaml_cpp_struct {                                                                                        \
     template <> inline constexpr bool is_yaml_struct<T> = true;                                                        \
     namespace detail {                                                                                                 \
+    template <> struct struct_name<T> {                                                                                \
+        static constexpr const char *value = #T;                                                                       \
+    };                                                                                                                 \
     template <> struct field_access<T> {                                                                               \
         template <typename F> static void for_each(T &obj, F &&f) { YCS_PP_MAP_STMT(YCS_VISIT_STMT, __VA_ARGS__) }     \
         template <typename F> static void for_each(const T &obj, F &&f) {                                              \

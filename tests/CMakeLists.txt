@@ -51,5 +51,8 @@ endfunction()
 ycs_add_test(unit_tests test_yaml_cpp_struct.cpp)
 target_compile_definitions(unit_tests PRIVATE OPEN_YAML_TO_JSON)
 
+ycs_add_test(define_tests test_ycs_define.cpp)
+
 enable_testing()
 add_test(NAME unit_tests COMMAND unit_tests)
+add_test(NAME define_tests COMMAND define_tests)
