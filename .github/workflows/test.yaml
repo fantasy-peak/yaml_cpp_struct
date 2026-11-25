@@ -9,7 +9,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-24.04]
+        # macOS 14 runners were retired on 2026-11-02; macOS 15 is the
+        # current arm64 image.
+        os: [macos-15, ubuntu-24.04]
 
     steps:
       - name: checkout
