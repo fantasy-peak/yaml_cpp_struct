@@ -15,6 +15,8 @@ It's a header-only wrapper. It's easy to map YAML documents to C++ structs.
   dangle; use `std::string` instead.
 - Fields are required by default. `YCS_OPT(field, default)` declares an explicit
   default for a field that may be missing.
+- Registration either outside the struct with `YCS_ADD_STRUCT(T, ...)` or inside
+  it with `YCS_DEFINE(...)`; both accept the same annotations.
 - Structured errors with field path, line and column, plus a `Result<T>` API.
 - Node / stream / multi-document APIs (`from_node`, `from_yaml_stream`,
   `to_node`, `from_yaml_all`, `from_yaml_all_str`).
@@ -138,6 +140,41 @@ default value or just an initializer.
 
 An explicit YAML `null` is a present value: `std::optional<T>` becomes
 `std::nullopt`, while a non-optional field reports an error.
+
+## In-class definition
+
+`YCS_DEFINE(...)` is the in-class alternative to `YCS_ADD_STRUCT`. It accepts
+the same annotations and needs no namespace-scope registration:
+
+```cpp
+struct LoginConfig {
+    std::string path;
+    int ttl;
+    std::vector<std::string> methods;
+
+    YCS_DEFINE(path, YCS_OPT(ttl, 3600), YCS_OPT(methods, {"Post"}))
+};
+```
+
+It can be placed in a `private:` section; the library is granted access
+internally. A struct declared with `YCS_DEFINE` can be used as a field, a nested
+struct, `std::optional<T>`, inside containers (`std::vector<T>`, `std::map`,
+`std::array`, ...), and as a `std::variant` alternative.
+
+`YCS_ENV_PREFIX` is still declared outside the struct:
+
+```cpp
+YCS_ENV_PREFIX(LoginConfig, "LOGIN_")
+```
+
+Enums are not affected: register them with `YCS_ADD_ENUM` and use them as field
+types, including inside containers and variants.
+
+Limitation: `YCS_DEFINE` cannot inject a `YAML::convert<T>` specialization, so
+`YAML::Node::as<T>()` is not available for those types. Use the library APIs
+(`from_yaml`, `from_yaml_str`, `from_node`, `node_as`, `to_yaml`, ...) instead.
+Diagnostics for required-field errors name the type only for `YCS_ADD_STRUCT`
+structs.
 
 ## Structured errors
 
