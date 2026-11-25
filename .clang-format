@@ -1,0 +1,11 @@
+---
+# LLVM style with two project overrides: 4-space indent and 120-column limit.
+# Keep it minimal: inheriting the LLVM baseline means the file stays correct
+# across clang-format versions instead of pinning the dump of one release
+# (unknown keys from a newer dump only produce warnings on older binaries).
+#   clang-format --style=LLVM --dump-config   # expand the full baseline
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+...

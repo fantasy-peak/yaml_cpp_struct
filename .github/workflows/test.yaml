@@ -7,13 +7,30 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-12, ubuntu-22.04]
+        # macOS 14 runners were retired on 2026-11-02; macOS 15 is the
+        # current arm64 image.
+        os: [macos-15, ubuntu-24.04]
 
     steps:
-    - name: checkout
-      uses: actions/checkout@v3
-    - name: build example
-      run: cd example && mkdir build && cd build && cmake .. && make -j2
-    - name: run example
-      run: cd example && cd build && ./example ../config.yaml
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: configure example
+        run: cmake -S example -B example/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: build example
+        run: cmake --build example/build --parallel 2
+
+      - name: run example
+        run: ./example/build/example example/config.yaml
+
+      - name: configure tests
+        run: cmake -S tests -B tests/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: build tests
+        run: cmake --build tests/build --parallel 2
+
+      - name: run tests
+        run: ctest --test-dir tests/build --output-on-failure
