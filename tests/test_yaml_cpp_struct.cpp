@@ -28,8 +28,6 @@
 
 namespace {
 
-template <typename T> auto parse(const std::string &yaml) { return yaml_cpp_struct::from_yaml_str<T>(yaml); }
-
 yaml_cpp_struct::EnvLookup make_env(std::map<std::string, std::string, std::less<>> values) {
     return [values = std::move(values)](std::string_view name) -> std::optional<std::string> {
         const auto it = values.find(std::string(name));
@@ -43,6 +41,91 @@ yaml_cpp_struct::EnvOptions explicit_env_options() {
     yaml_cpp_struct::EnvOptions options;
     options.enabled = true;
     return options;
+}
+
+template <typename T>
+yaml_cpp_struct::EnvOptions
+env_options_with(yaml_cpp_struct::EnvLookup lookup,
+                 yaml_cpp_struct::EnvOptions options = yaml_cpp_struct::env_options_for<T>()) {
+    options.lookup = std::move(lookup);
+    return options;
+}
+
+template <typename T> yaml_cpp_struct::Result<T> load_file(const std::string &file) {
+    return yaml_cpp_struct::from_yaml<T>(file);
+}
+
+template <typename T> yaml_cpp_struct::Result<T> load_file(const std::string &file, yaml_cpp_struct::EnvLookup lookup) {
+    return yaml_cpp_struct::from_yaml<T>(file, env_options_with<T>(std::move(lookup)));
+}
+
+template <typename T>
+yaml_cpp_struct::Result<T> load_file(const std::string &file, yaml_cpp_struct::EnvOptions options,
+                                     yaml_cpp_struct::EnvLookup lookup) {
+    options.lookup = std::move(lookup);
+    return yaml_cpp_struct::from_yaml<T>(file, options);
+}
+
+template <typename T> yaml_cpp_struct::Result<T> load_str(const std::string &yaml) {
+    return yaml_cpp_struct::from_yaml_str<T>(yaml);
+}
+
+template <typename T> yaml_cpp_struct::Result<T> load_str(const std::string &yaml, yaml_cpp_struct::EnvLookup lookup) {
+    return yaml_cpp_struct::from_yaml_str<T>(yaml, env_options_with<T>(std::move(lookup)));
+}
+
+template <typename T>
+yaml_cpp_struct::Result<T> load_str(const std::string &yaml, yaml_cpp_struct::EnvOptions options,
+                                    yaml_cpp_struct::EnvLookup lookup) {
+    options.lookup = std::move(lookup);
+    return yaml_cpp_struct::from_yaml_str<T>(yaml, options);
+}
+
+template <typename T> yaml_cpp_struct::Result<T> load_stream(std::istream &in) {
+    return yaml_cpp_struct::from_yaml_stream<T>(in);
+}
+
+template <typename T>
+yaml_cpp_struct::Result<T> load_stream(std::istream &in, yaml_cpp_struct::EnvOptions options,
+                                       yaml_cpp_struct::EnvLookup lookup) {
+    options.lookup = std::move(lookup);
+    return yaml_cpp_struct::from_yaml_stream<T>(in, options);
+}
+
+template <typename T> yaml_cpp_struct::Result<std::vector<T>> load_all_str(const std::string &yaml) {
+    return yaml_cpp_struct::from_yaml_all_str<T>(yaml);
+}
+
+template <typename T>
+yaml_cpp_struct::Result<std::vector<T>> load_all_str(const std::string &yaml, yaml_cpp_struct::EnvOptions options,
+                                                     yaml_cpp_struct::EnvLookup lookup) {
+    options.lookup = std::move(lookup);
+    return yaml_cpp_struct::from_yaml_all_str<T>(yaml, options);
+}
+
+template <typename T> yaml_cpp_struct::Result<T> load_env(yaml_cpp_struct::EnvLookup lookup) {
+    return yaml_cpp_struct::from_env<T>(env_options_with<T>(std::move(lookup)));
+}
+
+template <typename T>
+yaml_cpp_struct::Result<T> load_env(yaml_cpp_struct::EnvOptions options, yaml_cpp_struct::EnvLookup lookup) {
+    options.lookup = std::move(lookup);
+    return yaml_cpp_struct::from_env<T>(options);
+}
+
+template <typename T> struct Parsed {
+    std::optional<T> value;
+    std::string error;
+};
+
+template <typename T> Parsed<T> parse(const std::string &yaml) {
+    auto result = yaml_cpp_struct::from_yaml_str<T>(yaml);
+    return {std::move(result.value), yaml_cpp_struct::format_error(result.error)};
+}
+
+template <typename T> Parsed<std::string> encode(const T &obj) {
+    auto result = yaml_cpp_struct::to_yaml(obj);
+    return {std::move(result.value), yaml_cpp_struct::format_error(result.error)};
 }
 
 } // namespace
@@ -391,12 +474,12 @@ TEST(YamlCppStruct, Uint8Range) {
 
 TEST(YamlCppStruct, Encode8BitAsNumbers) {
     const ByteFields bytes{200, -100};
-    const auto [encoded, error] = yaml_cpp_struct::to_yaml(bytes);
+    const auto [encoded, error] = encode(bytes);
     ASSERT_TRUE(encoded.has_value()) << error;
     EXPECT_NE(encoded->find("200"), std::string::npos);
     EXPECT_NE(encoded->find("-100"), std::string::npos);
 
-    const auto [scalar, scalar_error] = yaml_cpp_struct::to_yaml(uint8_t{42});
+    const auto [scalar, scalar_error] = encode(uint8_t{42});
     ASSERT_TRUE(scalar.has_value()) << scalar_error;
     EXPECT_NE(scalar->find("42"), std::string::npos);
 }
@@ -430,7 +513,7 @@ TEST(YamlCppStruct, Enum) {
     EXPECT_FALSE(invalid_value.has_value());
     EXPECT_FALSE(invalid_value_error.empty());
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(static_cast<Color>(99));
+    const auto [encoded, encode_error] = encode(static_cast<Color>(99));
     EXPECT_FALSE(encoded.has_value());
     EXPECT_FALSE(encode_error.empty());
 }
@@ -439,7 +522,7 @@ TEST(YamlCppStruct, RoundTrip) {
     const auto [cfg, error] = parse<Everything>(kEverythingYaml);
     ASSERT_TRUE(cfg.has_value()) << error;
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(*cfg);
+    const auto [encoded, encode_error] = encode(*cfg);
     ASSERT_TRUE(encoded.has_value()) << encode_error;
 
     const auto [round_trip, parse_error] = parse<Everything>(*encoded);
@@ -466,9 +549,10 @@ TEST(YamlCppStruct, RoundTrip) {
 }
 
 TEST(YamlCppStruct, FileErrors) {
-    const auto [cfg, error] = yaml_cpp_struct::from_yaml<TextOnly>("/definitely/not/here.yaml");
-    EXPECT_FALSE(cfg.has_value());
-    EXPECT_NE(error.find("not found"), std::string::npos);
+    const auto result = load_file<TextOnly>("/definitely/not/here.yaml");
+    EXPECT_FALSE(result.value.has_value());
+    EXPECT_EQ(result.error.code, yaml_cpp_struct::ErrorCode::BadFile);
+    EXPECT_NE(result.error.message.find("not found"), std::string::npos);
 }
 
 TEST(YamlCppStruct, EnvOverridesFromFile) {
@@ -481,8 +565,8 @@ TEST(YamlCppStruct, EnvOverridesFromFile) {
         out << "name: original\nnested:\n  value: 5\n  label: file\n";
     }
 
-    const auto result = yaml_cpp_struct::from_yaml_result<EnvConfig>(
-        path.string(), make_env({{"APP_NAME", "from-env"}, {"APP_NESTED__LABEL", "env-label"}}));
+    const auto result =
+        load_file<EnvConfig>(path.string(), make_env({{"APP_NAME", "from-env"}, {"APP_NESTED__LABEL", "env-label"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->name, std::string("from-env"));
     EXPECT_EQ(result.value->nested.value, 5);
@@ -491,47 +575,43 @@ TEST(YamlCppStruct, EnvOverridesFromFile) {
     std::error_code ignored;
     fs::remove(path, ignored);
 
-    const auto missing = yaml_cpp_struct::from_yaml_result<EnvConfig>("/definitely/not/here.yaml", make_env({}));
+    const auto missing = load_file<EnvConfig>("/definitely/not/here.yaml", make_env({}));
     EXPECT_FALSE(missing.value.has_value());
     EXPECT_EQ(missing.error.code, yaml_cpp_struct::ErrorCode::BadFile);
 }
 
 TEST(YamlCppStruct, EnvOnlyAndPrecedence) {
-    const auto only_env = yaml_cpp_struct::from_yaml_str_result<EnvOnly>("optional_field: file\n",
-                                                                         make_env({{"APP_REQUIRED_FIELD", "42"}}));
+    const auto only_env = load_str<EnvOnly>("optional_field: file\n", make_env({{"APP_REQUIRED_FIELD", "42"}}));
     ASSERT_TRUE(only_env.value.has_value()) << yaml_cpp_struct::format_error(only_env.error);
     EXPECT_EQ(only_env.value->required_field, 42);
     EXPECT_EQ(only_env.value->optional_field, std::string("file"));
 
-    const auto env_wins = yaml_cpp_struct::from_yaml_str_result<EnvOnly>(
-        "required_field: 1\noptional_field: file\n",
-        make_env({{"APP_REQUIRED_FIELD", "2"}, {"APP_OPTIONAL_FIELD", "env"}}));
+    const auto env_wins = load_str<EnvOnly>("required_field: 1\noptional_field: file\n",
+                                            make_env({{"APP_REQUIRED_FIELD", "2"}, {"APP_OPTIONAL_FIELD", "env"}}));
     ASSERT_TRUE(env_wins.value.has_value()) << yaml_cpp_struct::format_error(env_wins.error);
     EXPECT_EQ(env_wins.value->required_field, 2);
     EXPECT_EQ(env_wins.value->optional_field, std::string("env"));
 
-    const auto missing = yaml_cpp_struct::from_yaml_str_result<EnvOnly>("optional_field: file\n", make_env({}));
+    const auto missing = load_str<EnvOnly>("optional_field: file\n", make_env({}));
     EXPECT_FALSE(missing.value.has_value());
     EXPECT_EQ(missing.error.code, yaml_cpp_struct::ErrorCode::MissingField);
 }
 
 TEST(YamlCppStruct, EnvEmptyAndRawStrings) {
-    const auto ignored = yaml_cpp_struct::from_yaml_str_result<EnvOnly>(
-        "required_field: 1\noptional_field: file\n",
-        make_env({{"APP_REQUIRED_FIELD", ""}, {"APP_OPTIONAL_FIELD", ""}}));
+    const auto ignored = load_str<EnvOnly>("required_field: 1\noptional_field: file\n",
+                                           make_env({{"APP_REQUIRED_FIELD", ""}, {"APP_OPTIONAL_FIELD", ""}}));
     ASSERT_TRUE(ignored.value.has_value()) << yaml_cpp_struct::format_error(ignored.error);
     EXPECT_EQ(ignored.value->required_field, 1);
     EXPECT_EQ(ignored.value->optional_field, std::string("file"));
 
     auto options = yaml_cpp_struct::env_options_for<EnvOnly>();
     options.ignore_empty = false;
-    const auto empty_string = yaml_cpp_struct::from_yaml_str_result<EnvOnly>(
-        "required_field: 1\noptional_field: file\n", options, make_env({{"APP_OPTIONAL_FIELD", ""}}));
+    const auto empty_string =
+        load_str<EnvOnly>("required_field: 1\noptional_field: file\n", options, make_env({{"APP_OPTIONAL_FIELD", ""}}));
     ASSERT_TRUE(empty_string.value.has_value()) << yaml_cpp_struct::format_error(empty_string.error);
     EXPECT_EQ(empty_string.value->optional_field, std::string(""));
 
-    const auto raw = yaml_cpp_struct::from_yaml_str_result<EnvOnly>("required_field: 1\n",
-                                                                    make_env({{"APP_OPTIONAL_FIELD", "001"}}));
+    const auto raw = load_str<EnvOnly>("required_field: 1\n", make_env({{"APP_OPTIONAL_FIELD", "001"}}));
     ASSERT_TRUE(raw.value.has_value()) << yaml_cpp_struct::format_error(raw.error);
     EXPECT_EQ(raw.value->optional_field, std::string("001"));
 }
@@ -539,8 +619,8 @@ TEST(YamlCppStruct, EnvEmptyAndRawStrings) {
 TEST(YamlCppStruct, EnvParseStringsAsYaml) {
     auto options = yaml_cpp_struct::env_options_for<EnvOnly>();
     options.parse_strings_as_yaml = true;
-    const auto result = yaml_cpp_struct::from_yaml_str_result<EnvOnly>(
-        "required_field: 1\n", options, make_env({{"APP_OPTIONAL_FIELD", "\"line1\\nline2\""}}));
+    const auto result =
+        load_str<EnvOnly>("required_field: 1\n", options, make_env({{"APP_OPTIONAL_FIELD", "\"line1\\nline2\""}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->optional_field, std::string("line1\nline2"));
 }
@@ -548,69 +628,63 @@ TEST(YamlCppStruct, EnvParseStringsAsYaml) {
 TEST(YamlCppStruct, EnvListSeparator) {
     auto options = yaml_cpp_struct::env_options_for<EnvLists>();
 
-    const auto yaml_list =
-        yaml_cpp_struct::from_yaml_str_result<EnvLists>("", options, make_env({{"APP_VALUES", "[4, 5]"}}));
+    const auto yaml_list = load_str<EnvLists>("", options, make_env({{"APP_VALUES", "[4, 5]"}}));
     ASSERT_TRUE(yaml_list.value.has_value()) << yaml_cpp_struct::format_error(yaml_list.error);
     EXPECT_EQ(yaml_list.value->values, (std::vector<int>{4, 5}));
 
     options.list_separator = ',';
-    const auto comma_list =
-        yaml_cpp_struct::from_yaml_str_result<EnvLists>("", options, make_env({{"APP_VALUES", "1,2,3"}}));
+    const auto comma_list = load_str<EnvLists>("", options, make_env({{"APP_VALUES", "1,2,3"}}));
     ASSERT_TRUE(comma_list.value.has_value()) << yaml_cpp_struct::format_error(comma_list.error);
     EXPECT_EQ(comma_list.value->values, (std::vector<int>{1, 2, 3}));
 }
 
 TEST(YamlCppStruct, ExplicitEnvNames) {
-    const auto defaulted =
-        yaml_cpp_struct::from_env_result<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}}));
+    const auto defaulted = load_env<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}}));
     ASSERT_TRUE(defaulted.value.has_value()) << yaml_cpp_struct::format_error(defaulted.error);
     EXPECT_EQ(defaulted.value->port, 8080);
     EXPECT_EQ(defaulted.value->timeout, 30);
 
-    const auto explicit_timeout = yaml_cpp_struct::from_env_result<ExplicitEnv>(
-        explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}, {"CUSTOM_TIMEOUT", "60"}}));
+    const auto explicit_timeout =
+        load_env<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}, {"CUSTOM_TIMEOUT", "60"}}));
     ASSERT_TRUE(explicit_timeout.value.has_value()) << yaml_cpp_struct::format_error(explicit_timeout.error);
     EXPECT_EQ(explicit_timeout.value->port, 8080);
     EXPECT_EQ(explicit_timeout.value->timeout, 60);
 }
 
 TEST(YamlCppStruct, ExplicitNestedEnvName) {
-    const auto nested = yaml_cpp_struct::from_env_result<ExplicitNested>(
+    const auto nested = load_env<ExplicitNested>(
         explicit_env_options(), make_env({{"CUSTOM_INNER__VALUE", "42"}, {"CUSTOM_INNER__LABEL", "nested"}}));
     ASSERT_TRUE(nested.value.has_value()) << yaml_cpp_struct::format_error(nested.error);
     EXPECT_EQ(nested.value->inner.value, 42);
     EXPECT_EQ(nested.value->inner.label, std::string("nested"));
 
-    const auto whole = yaml_cpp_struct::from_env_result<ExplicitNested>(
-        explicit_env_options(), make_env({{"CUSTOM_INNER", "{value: 7, label: whole}"}}));
+    const auto whole =
+        load_env<ExplicitNested>(explicit_env_options(), make_env({{"CUSTOM_INNER", "{value: 7, label: whole}"}}));
     ASSERT_TRUE(whole.value.has_value()) << yaml_cpp_struct::format_error(whole.error);
     EXPECT_EQ(whole.value->inner.value, 7);
     EXPECT_EQ(whole.value->inner.label, std::string("whole"));
 }
 
 TEST(YamlCppStruct, FromEnvRequiresPrefixOrOptIn) {
-    const auto disabled = yaml_cpp_struct::from_env_result<NoPrefix>(make_env({{"PORT", "9"}}));
+    const auto disabled = load_env<NoPrefix>(make_env({{"PORT", "9"}}));
     ASSERT_TRUE(disabled.value.has_value()) << yaml_cpp_struct::format_error(disabled.error);
     EXPECT_EQ(disabled.value->port, 7);
 
-    const auto opt_in =
-        yaml_cpp_struct::from_env_result<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}}));
+    const auto opt_in = load_env<ExplicitEnv>(explicit_env_options(), make_env({{"CUSTOM_PORT", "8080"}}));
     ASSERT_TRUE(opt_in.value.has_value()) << yaml_cpp_struct::format_error(opt_in.error);
     EXPECT_EQ(opt_in.value->port, 8080);
 }
 
 TEST(YamlCppStruct, EnvErrors) {
-    const auto duplicate =
-        yaml_cpp_struct::from_env_result<DuplicateEnv>(explicit_env_options(), make_env({{"SAME_ENV", "1"}}));
+    const auto duplicate = load_env<DuplicateEnv>(explicit_env_options(), make_env({{"SAME_ENV", "1"}}));
     EXPECT_FALSE(duplicate.value.has_value());
     EXPECT_EQ(duplicate.error.code, yaml_cpp_struct::ErrorCode::EnvDuplicate);
 
-    const auto conflict =
-        yaml_cpp_struct::from_yaml_str_result<EnvConfig>("nested: 5\n", make_env({{"APP_NESTED__LABEL", "x"}}));
+    const auto conflict = load_str<EnvConfig>("nested: 5\n", make_env({{"APP_NESTED__LABEL", "x"}}));
     EXPECT_FALSE(conflict.value.has_value());
     EXPECT_EQ(conflict.error.code, yaml_cpp_struct::ErrorCode::EnvConflict);
 
-    const auto parse = yaml_cpp_struct::from_env_result<EnvOnly>(make_env({{"APP_REQUIRED_FIELD", "not-an-int"}}));
+    const auto parse = load_env<EnvOnly>(make_env({{"APP_REQUIRED_FIELD", "not-an-int"}}));
     EXPECT_FALSE(parse.value.has_value());
     EXPECT_EQ(parse.error.code, yaml_cpp_struct::ErrorCode::EnvParseError);
     EXPECT_EQ(parse.error.env_name, std::string("APP_REQUIRED_FIELD"));
@@ -619,13 +693,13 @@ TEST(YamlCppStruct, EnvErrors) {
 }
 
 TEST(YamlCppStruct, NoEnvPrefixMeansNoEnv) {
-    const auto result = yaml_cpp_struct::from_yaml_str_result<NoPrefix>("", make_env({{"PORT", "9"}}));
+    const auto result = load_str<NoPrefix>("", make_env({{"PORT", "9"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->port, 7);
 }
 
 TEST(YamlCppStruct, FromEnvWithoutFile) {
-    const auto result = yaml_cpp_struct::from_env_result<EnvOnly>(make_env({{"APP_REQUIRED_FIELD", "7"}}));
+    const auto result = load_env<EnvOnly>(make_env({{"APP_REQUIRED_FIELD", "7"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->required_field, 7);
     EXPECT_EQ(result.value->optional_field, std::string("default"));
@@ -638,8 +712,7 @@ TEST(YamlCppStruct, EnvAudit) {
         applied.emplace_back(std::string(env), std::string(path));
     };
 
-    const auto result =
-        yaml_cpp_struct::from_yaml_str_result<EnvOnly>("", options, make_env({{"APP_REQUIRED_FIELD", "1"}}));
+    const auto result = load_str<EnvOnly>("", options, make_env({{"APP_REQUIRED_FIELD", "1"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     ASSERT_EQ(applied.size(), std::size_t{1});
     EXPECT_EQ(applied[0].first, std::string("APP_REQUIRED_FIELD"));
@@ -647,21 +720,19 @@ TEST(YamlCppStruct, EnvAudit) {
 }
 
 TEST(YamlCppStruct, OptionalNestedEnv) {
-    const auto nested = yaml_cpp_struct::from_env_result<OptionalNested>(
-        make_env({{"APP_INNER__VALUE", "1"}, {"APP_INNER__LABEL", "x"}}));
+    const auto nested = load_env<OptionalNested>(make_env({{"APP_INNER__VALUE", "1"}, {"APP_INNER__LABEL", "x"}}));
     ASSERT_TRUE(nested.value.has_value()) << yaml_cpp_struct::format_error(nested.error);
     ASSERT_TRUE(nested.value->inner.has_value());
     EXPECT_EQ(nested.value->inner->value, 1);
     EXPECT_EQ(nested.value->inner->label, std::string("x"));
 
-    const auto whole =
-        yaml_cpp_struct::from_env_result<OptionalNested>(make_env({{"APP_INNER", "{value: 2, label: y}"}}));
+    const auto whole = load_env<OptionalNested>(make_env({{"APP_INNER", "{value: 2, label: y}"}}));
     ASSERT_TRUE(whole.value.has_value()) << yaml_cpp_struct::format_error(whole.error);
     ASSERT_TRUE(whole.value->inner.has_value());
     EXPECT_EQ(whole.value->inner->value, 2);
     EXPECT_EQ(whole.value->inner->label, std::string("y"));
 
-    const auto absent = yaml_cpp_struct::from_env_result<OptionalNested>(make_env({}));
+    const auto absent = load_env<OptionalNested>(make_env({}));
     ASSERT_TRUE(absent.value.has_value()) << yaml_cpp_struct::format_error(absent.error);
     EXPECT_FALSE(absent.value->inner.has_value());
 }
@@ -672,20 +743,19 @@ TEST(YamlCppStruct, EnvNamingOptions) {
     options.uppercase = false;
     options.separator = "_";
 
-    const auto result = yaml_cpp_struct::from_env_result<EnvNaming>(
-        options, make_env({{"app_inner_value", "1"}, {"app_inner_label", "x"}}));
+    const auto result = load_env<EnvNaming>(options, make_env({{"app_inner_value", "1"}, {"app_inner_label", "x"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->inner.value, 1);
     EXPECT_EQ(result.value->inner.label, std::string("x"));
 }
 
 TEST(YamlCppStruct, EnvTypes) {
-    const auto result = yaml_cpp_struct::from_env_result<EnvTypes>(make_env({{"APP_COLOR", "Green"},
-                                                                             {"APP_TIMEOUT", "1500"},
-                                                                             {"APP_PATH", "/tmp/x"},
-                                                                             {"APP_VARIANT", "hello"},
-                                                                             {"APP_LETTER", "Q"},
-                                                                             {"APP_MAYBE", "7"}}));
+    const auto result = load_env<EnvTypes>(make_env({{"APP_COLOR", "Green"},
+                                                     {"APP_TIMEOUT", "1500"},
+                                                     {"APP_PATH", "/tmp/x"},
+                                                     {"APP_VARIANT", "hello"},
+                                                     {"APP_LETTER", "Q"},
+                                                     {"APP_MAYBE", "7"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->color, EnvColor::Green);
     EXPECT_EQ(result.value->timeout, std::chrono::milliseconds{1500});
@@ -696,7 +766,7 @@ TEST(YamlCppStruct, EnvTypes) {
     ASSERT_TRUE(result.value->maybe.has_value());
     EXPECT_EQ(*result.value->maybe, 7);
 
-    const auto null_maybe = yaml_cpp_struct::from_env_result<EnvTypes>(make_env({{"APP_MAYBE", "null"}}));
+    const auto null_maybe = load_env<EnvTypes>(make_env({{"APP_MAYBE", "null"}}));
     ASSERT_TRUE(null_maybe.value.has_value()) << yaml_cpp_struct::format_error(null_maybe.error);
     EXPECT_FALSE(null_maybe.value->maybe.has_value());
 }
@@ -705,14 +775,13 @@ TEST(YamlCppStruct, EnvStreamAndMultiDocument) {
     auto options = yaml_cpp_struct::env_options_for<EnvOnly>();
 
     std::istringstream in("optional_field: file\n");
-    const auto stream =
-        yaml_cpp_struct::from_stream_result<EnvOnly>(in, options, make_env({{"APP_REQUIRED_FIELD", "1"}}));
+    const auto stream = load_stream<EnvOnly>(in, options, make_env({{"APP_REQUIRED_FIELD", "1"}}));
     ASSERT_TRUE(stream.value.has_value()) << yaml_cpp_struct::format_error(stream.error);
     EXPECT_EQ(stream.value->required_field, 1);
     EXPECT_EQ(stream.value->optional_field, std::string("file"));
 
-    const auto docs = yaml_cpp_struct::from_yaml_all_str_result<EnvOnly>(
-        "---\nrequired_field: 1\n---\nrequired_field: 2\n", options, make_env({{"APP_OPTIONAL_FIELD", "env"}}));
+    const auto docs = load_all_str<EnvOnly>("---\nrequired_field: 1\n---\nrequired_field: 2\n", options,
+                                            make_env({{"APP_OPTIONAL_FIELD", "env"}}));
     ASSERT_TRUE(docs.value.has_value()) << yaml_cpp_struct::format_error(docs.error);
     ASSERT_EQ(docs.value->size(), std::size_t{2});
     EXPECT_EQ((*docs.value)[0].required_field, 1);
@@ -722,23 +791,21 @@ TEST(YamlCppStruct, EnvStreamAndMultiDocument) {
 }
 
 TEST(YamlCppStruct, WholeNestedEnvWins) {
-    const auto result = yaml_cpp_struct::from_yaml_str_result<EnvConfig>(
-        "name: file\nnested:\n  value: 1\n  label: file\n",
-        make_env({{"APP_NESTED", "{value: 2, label: whole}"}, {"APP_NESTED__LABEL", "ignored"}}));
+    const auto result =
+        load_str<EnvConfig>("name: file\nnested:\n  value: 1\n  label: file\n",
+                            make_env({{"APP_NESTED", "{value: 2, label: whole}"}, {"APP_NESTED__LABEL", "ignored"}}));
     ASSERT_TRUE(result.value.has_value()) << yaml_cpp_struct::format_error(result.error);
     EXPECT_EQ(result.value->nested.value, 2);
     EXPECT_EQ(result.value->nested.label, std::string("whole"));
 }
 
 TEST(YamlCppStruct, EnvErrorMetadata) {
-    const auto duplicate =
-        yaml_cpp_struct::from_env_result<DuplicateEnv>(explicit_env_options(), make_env({{"SAME_ENV", "1"}}));
+    const auto duplicate = load_env<DuplicateEnv>(explicit_env_options(), make_env({{"SAME_ENV", "1"}}));
     EXPECT_EQ(duplicate.error.code, yaml_cpp_struct::ErrorCode::EnvDuplicate);
     EXPECT_EQ(duplicate.error.env_name, std::string("SAME_ENV"));
     EXPECT_FALSE(duplicate.error.path.empty());
 
-    const auto conflict =
-        yaml_cpp_struct::from_yaml_str_result<EnvConfig>("nested: 5\n", make_env({{"APP_NESTED__LABEL", "x"}}));
+    const auto conflict = load_str<EnvConfig>("nested: 5\n", make_env({{"APP_NESTED__LABEL", "x"}}));
     EXPECT_EQ(conflict.error.code, yaml_cpp_struct::ErrorCode::EnvConflict);
     EXPECT_EQ(conflict.error.env_name, std::string("APP_NESTED__LABEL"));
     EXPECT_EQ(conflict.error.path, std::string("nested.label"));
@@ -794,62 +861,62 @@ TEST(YamlCppStruct, PerFieldRequired) {
 }
 
 TEST(YamlCppStruct, StructuredErrors) {
-    const auto invalid = yaml_cpp_struct::from_yaml_str_result<TextOnly>("text: [1, 2]\n");
+    const auto invalid = load_str<TextOnly>("text: [1, 2]\n");
     EXPECT_FALSE(invalid.value.has_value());
     EXPECT_EQ(invalid.error.code, yaml_cpp_struct::ErrorCode::InvalidField);
     EXPECT_EQ(invalid.error.path, std::string("text"));
     EXPECT_GE(invalid.error.line, 0);
     EXPECT_GE(invalid.error.column, 0);
 
-    const auto nested = yaml_cpp_struct::from_yaml_str_result<NestedOnly>("inner:\n  value: nope\n  label: x\n");
+    const auto nested = load_str<NestedOnly>("inner:\n  value: nope\n  label: x\n");
     EXPECT_FALSE(nested.value.has_value());
     EXPECT_EQ(nested.error.code, yaml_cpp_struct::ErrorCode::InvalidField);
     EXPECT_EQ(nested.error.path, std::string("inner.value"));
 
-    const auto missing = yaml_cpp_struct::from_yaml_str_result<MixedRequired>("optional_field: x\n");
+    const auto missing = load_str<MixedRequired>("optional_field: x\n");
     EXPECT_EQ(missing.error.code, yaml_cpp_struct::ErrorCode::MissingField);
     EXPECT_EQ(missing.error.path, std::string("required_field"));
 
-    const auto not_a_map = yaml_cpp_struct::from_yaml_str_result<TextOnly>("42\n");
+    const auto not_a_map = load_str<TextOnly>("42\n");
     EXPECT_EQ(not_a_map.error.code, yaml_cpp_struct::ErrorCode::NotAMap);
 
-    const auto empty_required = yaml_cpp_struct::from_yaml_str_result<TextOnly>("");
+    const auto empty_required = load_str<TextOnly>("");
     EXPECT_EQ(empty_required.error.code, yaml_cpp_struct::ErrorCode::MissingField);
 
-    const auto no_file = yaml_cpp_struct::from_yaml_result<TextOnly>("/definitely/not/here.yaml");
+    const auto no_file = load_file<TextOnly>("/definitely/not/here.yaml");
     EXPECT_EQ(no_file.error.code, yaml_cpp_struct::ErrorCode::BadFile);
 
-    const auto parse_error = yaml_cpp_struct::from_yaml_str_result<TextOnly>("a: [1, 2\n");
+    const auto parse_error = load_str<TextOnly>("a: [1, 2\n");
     EXPECT_EQ(parse_error.error.code, yaml_cpp_struct::ErrorCode::ParseError);
 }
 
 TEST(YamlCppStruct, NodeAndStreamApis) {
     YAML::Node node = YAML::Load("text: via-node\n");
-    const auto from_node_result = yaml_cpp_struct::from_node_result<TextOnly>(node);
-    ASSERT_TRUE(from_node_result.value.has_value());
-    EXPECT_EQ(from_node_result.value->text, std::string("via-node"));
+    const auto from_node = yaml_cpp_struct::from_node<TextOnly>(node);
+    ASSERT_TRUE(from_node.value.has_value());
+    EXPECT_EQ(from_node.value->text, std::string("via-node"));
 
-    const auto to_node_result = yaml_cpp_struct::to_node_result(TextOnly{"x"});
-    ASSERT_TRUE(to_node_result.value.has_value());
-    EXPECT_TRUE(to_node_result.value->IsMap());
-    const auto again = yaml_cpp_struct::from_node_result<TextOnly>(*to_node_result.value);
+    const auto to_node = yaml_cpp_struct::to_node(TextOnly{"x"});
+    ASSERT_TRUE(to_node.value.has_value());
+    EXPECT_TRUE(to_node.value->IsMap());
+    const auto again = yaml_cpp_struct::from_node<TextOnly>(*to_node.value);
     ASSERT_TRUE(again.value.has_value());
     EXPECT_EQ(again.value->text, std::string("x"));
 
     std::istringstream in("text: via-stream\n");
-    const auto from_stream_result = yaml_cpp_struct::from_stream_result<TextOnly>(in);
-    ASSERT_TRUE(from_stream_result.value.has_value());
-    EXPECT_EQ(from_stream_result.value->text, std::string("via-stream"));
+    const auto from_yaml_stream = load_stream<TextOnly>(in);
+    ASSERT_TRUE(from_yaml_stream.value.has_value());
+    EXPECT_EQ(from_yaml_stream.value->text, std::string("via-stream"));
 
     std::ostringstream out;
-    const auto stream_error = yaml_cpp_struct::to_stream(TextOnly{"x"}, out);
-    EXPECT_EQ(stream_error.code, yaml_cpp_struct::ErrorCode::None);
+    const auto yaml_result = yaml_cpp_struct::to_yaml(TextOnly{"x"});
+    ASSERT_TRUE(yaml_result.value.has_value()) << yaml_cpp_struct::format_error(yaml_result.error);
+    out << *yaml_result.value;
     EXPECT_FALSE(out.str().empty());
 }
 
 TEST(YamlCppStruct, MultiDocument) {
-    const auto result =
-        yaml_cpp_struct::from_yaml_all_str_result<MixedRequired>("---\nrequired_field: 1\n---\nrequired_field: 2\n");
+    const auto result = load_all_str<MixedRequired>("---\nrequired_field: 1\n---\nrequired_field: 2\n");
     ASSERT_TRUE(result.value.has_value());
     ASSERT_EQ(result.value->size(), std::size_t{2});
     EXPECT_EQ((*result.value)[0].required_field, 1);
@@ -877,11 +944,11 @@ TEST(YamlCppStruct, ExtendedContainers) {
     ASSERT_TRUE(forward.has_value()) << forward_error;
     EXPECT_EQ(std::vector<int>(forward->begin(), forward->end()), (std::vector<int>{1, 2, 3}));
 
-    const auto [encoded_deque, encoded_deque_error] = yaml_cpp_struct::to_yaml(IntDeque{1, 2, 3});
+    const auto [encoded_deque, encoded_deque_error] = encode(IntDeque{1, 2, 3});
     ASSERT_TRUE(encoded_deque.has_value()) << encoded_deque_error;
     EXPECT_NE(encoded_deque->find("- 2"), std::string::npos);
 
-    const auto [encoded_forward, encoded_forward_error] = yaml_cpp_struct::to_yaml(IntForwardList{1, 2, 3});
+    const auto [encoded_forward, encoded_forward_error] = encode(IntForwardList{1, 2, 3});
     ASSERT_TRUE(encoded_forward.has_value()) << encoded_forward_error;
     EXPECT_NE(encoded_forward->find("- 2"), std::string::npos);
 
@@ -889,11 +956,11 @@ TEST(YamlCppStruct, ExtendedContainers) {
     ASSERT_TRUE(path.has_value()) << path_error;
     EXPECT_EQ(path->string(), std::string("/tmp/x y"));
 
-    const auto [encoded_path, encoded_path_error] = yaml_cpp_struct::to_yaml(std::filesystem::path{"/tmp/x y"});
+    const auto [encoded_path, encoded_path_error] = encode(std::filesystem::path{"/tmp/x y"});
     ASSERT_TRUE(encoded_path.has_value()) << encoded_path_error;
     EXPECT_NE(encoded_path->find("/tmp/x y"), std::string::npos);
 
-    const auto [encoded_desc, encoded_desc_error] = yaml_cpp_struct::to_yaml(DescendingSet{3, 2, 1});
+    const auto [encoded_desc, encoded_desc_error] = encode(DescendingSet{3, 2, 1});
     ASSERT_TRUE(encoded_desc.has_value()) << encoded_desc_error;
     const auto p1 = encoded_desc->find("- 3");
     const auto p2 = encoded_desc->find("- 2");
@@ -959,7 +1026,7 @@ ull: 4
     EXPECT_EQ(cfg->ll, -4);
     EXPECT_EQ(cfg->ull, 4u);
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(*cfg);
+    const auto [encoded, encode_error] = encode(*cfg);
     ASSERT_TRUE(encoded.has_value()) << encode_error;
     const auto [round_trip, parse_error] = parse<Scalars>(*encoded);
     ASSERT_TRUE(round_trip.has_value()) << parse_error;
@@ -1008,15 +1075,15 @@ TEST(YamlCppStruct, TopLevelScalars) {
     ASSERT_TRUE(wide.has_value()) << wide_error;
     EXPECT_DOUBLE_EQ(static_cast<double>(*wide), 2.5);
 
-    const auto [encoded_text, encoded_text_error] = yaml_cpp_struct::to_yaml(std::string("hello"));
+    const auto [encoded_text, encoded_text_error] = encode(std::string("hello"));
     ASSERT_TRUE(encoded_text.has_value()) << encoded_text_error;
     EXPECT_NE(encoded_text->find("hello"), std::string::npos);
 
-    const auto [encoded_bool, encoded_bool_error] = yaml_cpp_struct::to_yaml(true);
+    const auto [encoded_bool, encoded_bool_error] = encode(true);
     ASSERT_TRUE(encoded_bool.has_value()) << encoded_bool_error;
     EXPECT_NE(encoded_bool->find("true"), std::string::npos);
 
-    const auto [encoded_int, encoded_int_error] = yaml_cpp_struct::to_yaml(42);
+    const auto [encoded_int, encoded_int_error] = encode(42);
     ASSERT_TRUE(encoded_int.has_value()) << encoded_int_error;
     EXPECT_NE(encoded_int->find("42"), std::string::npos);
 }
@@ -1036,7 +1103,7 @@ hashed: {1: 10, 2: 20}
     EXPECT_EQ(cfg->hashed.at(1), 10);
     EXPECT_EQ(cfg->hashed.at(2), 20);
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(*cfg);
+    const auto [encoded, encode_error] = encode(*cfg);
     ASSERT_TRUE(encoded.has_value()) << encode_error;
     const auto [round_trip, parse_error] = parse<Maps>(*encoded);
     ASSERT_TRUE(round_trip.has_value()) << parse_error;
@@ -1073,7 +1140,7 @@ TEST(YamlCppStruct, OptionalContainers) {
     EXPECT_FALSE(nulls->opt_vec.has_value());
     EXPECT_FALSE(nulls->opt_map.has_value());
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(missing.value());
+    const auto [encoded, encode_error] = encode(missing.value());
     ASSERT_TRUE(encoded.has_value()) << encode_error;
     const auto [round_trip, parse_error] = parse<OptionalContainers>(*encoded);
     ASSERT_TRUE(round_trip.has_value()) << parse_error;
@@ -1098,7 +1165,7 @@ TEST(YamlCppStruct, VariantAlternatives) {
     EXPECT_FALSE(no_match.has_value());
     EXPECT_NE(no_match_error.find("variant"), std::string::npos);
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(Var{std::string("x")});
+    const auto [encoded, encode_error] = encode(Var{std::string("x")});
     ASSERT_TRUE(encoded.has_value()) << encode_error;
     EXPECT_NE(encoded->find("x"), std::string::npos);
 }
@@ -1130,7 +1197,7 @@ TEST(YamlCppStruct, Valarray) {
     EXPECT_EQ((*values)[1], 2);
     EXPECT_EQ((*values)[2], 3);
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(*values);
+    const auto [encoded, encode_error] = encode(*values);
     ASSERT_TRUE(encoded.has_value()) << encode_error;
     const auto [round_trip, parse_error] = parse<std::valarray<int>>(*encoded);
     ASSERT_TRUE(round_trip.has_value()) << parse_error;
@@ -1139,25 +1206,20 @@ TEST(YamlCppStruct, Valarray) {
 }
 
 TEST(YamlCppStruct, ErrorCodes) {
-    const auto bad_enum = yaml_cpp_struct::from_yaml_str_result<Color>("\"Purple\"\n");
+    const auto bad_enum = load_str<Color>("\"Purple\"\n");
     EXPECT_EQ(bad_enum.error.code, yaml_cpp_struct::ErrorCode::BadEnum);
 
-    const auto bad_enum_encode = yaml_cpp_struct::to_yaml_result(static_cast<Color>(99));
+    const auto bad_enum_encode = yaml_cpp_struct::to_yaml(static_cast<Color>(99));
     EXPECT_EQ(bad_enum_encode.error.code, yaml_cpp_struct::ErrorCode::BadEnum);
 
-    const auto out_of_range = yaml_cpp_struct::from_yaml_str_result<ByteFields>("byte: 300\nsbyte: 0\n");
+    const auto out_of_range = load_str<ByteFields>("byte: 300\nsbyte: 0\n");
     EXPECT_EQ(out_of_range.error.code, yaml_cpp_struct::ErrorCode::OutOfRange);
-
-    std::ostringstream bad_stream;
-    bad_stream.setstate(std::ios::badbit);
-    const auto stream_error = yaml_cpp_struct::to_stream(TextOnly{"x"}, bad_stream);
-    EXPECT_EQ(stream_error.code, yaml_cpp_struct::ErrorCode::EmitError);
 }
 
 TEST(YamlCppStruct, MonostateEncoding) {
     using MaybeInt = std::variant<std::monostate, int>;
 
-    const auto [encoded, error] = yaml_cpp_struct::to_yaml(MaybeInt{std::monostate{}});
+    const auto [encoded, error] = encode(MaybeInt{std::monostate{}});
     ASSERT_TRUE(encoded.has_value()) << error;
 
     const auto [decoded, decode_error] = parse<MaybeInt>(*encoded);
@@ -1167,13 +1229,13 @@ TEST(YamlCppStruct, MonostateEncoding) {
 
 TEST(YamlCppStruct, StreamParseError) {
     std::istringstream in("a: [1, 2\n");
-    const auto result = yaml_cpp_struct::from_stream_result<TextOnly>(in);
+    const auto result = load_stream<TextOnly>(in);
     EXPECT_FALSE(result.value.has_value());
     EXPECT_EQ(result.error.code, yaml_cpp_struct::ErrorCode::ParseError);
 }
 
 TEST(YamlCppStruct, EnvMalformedValue) {
-    const auto result = yaml_cpp_struct::from_env_result<EnvOnly>(make_env({{"APP_REQUIRED_FIELD", "["}}));
+    const auto result = load_env<EnvOnly>(make_env({{"APP_REQUIRED_FIELD", "["}}));
     EXPECT_FALSE(result.value.has_value());
     EXPECT_EQ(result.error.code, yaml_cpp_struct::ErrorCode::EnvParseError);
     EXPECT_EQ(result.error.env_name, std::string("APP_REQUIRED_FIELD"));
@@ -1181,8 +1243,7 @@ TEST(YamlCppStruct, EnvMalformedValue) {
 }
 
 TEST(YamlCppStruct, MultiDocumentError) {
-    const auto result =
-        yaml_cpp_struct::from_yaml_all_str_result<MixedRequired>("---\nrequired_field: 1\n---\noptional_field: x\n");
+    const auto result = load_all_str<MixedRequired>("---\nrequired_field: 1\n---\noptional_field: x\n");
     EXPECT_FALSE(result.value.has_value());
     EXPECT_EQ(result.error.code, yaml_cpp_struct::ErrorCode::MissingField);
 }
@@ -1200,7 +1261,7 @@ TEST(YamlCppStruct, NestedContainers) {
     ASSERT_TRUE(cfg->maybe_values[2].has_value());
     EXPECT_EQ(*cfg->maybe_values[2], 3);
 
-    const auto [encoded, encode_error] = yaml_cpp_struct::to_yaml(*cfg);
+    const auto [encoded, encode_error] = encode(*cfg);
     ASSERT_TRUE(encoded.has_value()) << encode_error;
     const auto [round_trip, parse_error] = parse<NestedContainers>(*encoded);
     ASSERT_TRUE(round_trip.has_value()) << parse_error;
@@ -1217,7 +1278,7 @@ TEST(YamlCppStruct, EightBitContainersEncodeAsNumbers) {
     input.values = std::valarray<uint8_t>{4, 68};
     input.signed_bytes = {-1, 65};
 
-    const auto [encoded, error] = yaml_cpp_struct::to_yaml(input);
+    const auto [encoded, error] = encode(input);
     ASSERT_TRUE(encoded.has_value()) << error;
     EXPECT_NE(encoded->find("- 65"), std::string::npos);
     EXPECT_NE(encoded->find("- 255"), std::string::npos);
@@ -1225,7 +1286,7 @@ TEST(YamlCppStruct, EightBitContainersEncodeAsNumbers) {
     EXPECT_EQ(encoded->find("\"\\x01\""), std::string::npos);
     EXPECT_EQ(encoded->find("a: A"), std::string::npos);
 
-    const auto [decoded, parse_error] = yaml_cpp_struct::from_yaml_str<U8Containers>(*encoded);
+    const auto [decoded, parse_error] = parse<U8Containers>(*encoded);
     ASSERT_TRUE(decoded.has_value()) << parse_error;
     EXPECT_EQ(decoded->bytes, input.bytes);
     EXPECT_EQ(decoded->listed, input.listed);

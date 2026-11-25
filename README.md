@@ -16,8 +16,8 @@ It's a header-only wrapper. It's easy to map YAML documents to C++ structs.
 - Fields are required by default. `YCS_OPT(field, default)` declares an explicit
   default for a field that may be missing.
 - Structured errors with field path, line and column, plus a `Result<T>` API.
-- Node / stream / multi-document APIs (`from_node_result`, `from_stream_result`,
-  `to_node_result`, `to_stream`, `from_yaml_all_result`).
+- Node / stream / multi-document APIs (`from_node`, `from_yaml_stream`,
+  `to_node`, `from_yaml_all`, `from_yaml_all_str`).
 - Automatic environment variable loading with per-struct prefixes, nested
   fields, explicit bindings and YAML value parsing.
 - Optional YAML to JSON conversion with `OPEN_YAML_TO_JSON`.
@@ -92,12 +92,19 @@ YCS_ADD_STRUCT(AccountInfo,
 YCS_ENV_PREFIX(AccountInfo, "APP_")
 
 int main(int, char** argv) {
-    auto [cfg, error] = yaml_cpp_struct::from_yaml<AccountInfo>(argv[1]);
-    if (!cfg) {
-        std::cerr << error << '\n';
+    auto cfg_result = yaml_cpp_struct::from_yaml<AccountInfo>(argv[1]);
+    if (!cfg_result) {
+        std::cerr << yaml_cpp_struct::format_error(cfg_result.error) << '\n';
         return 1;
     }
-    auto [str, e] = yaml_cpp_struct::to_yaml(cfg.value());
+    const AccountInfo& cfg = *cfg_result;
+
+    auto yaml_result = yaml_cpp_struct::to_yaml(cfg);
+    if (!yaml_result) {
+        std::cerr << yaml_cpp_struct::format_error(yaml_result.error) << '\n';
+        return 1;
+    }
+    std::cout << *yaml_result;
     return 0;
 }
 ```
@@ -134,16 +141,10 @@ An explicit YAML `null` is a present value: `std::optional<T>` becomes
 
 ## Structured errors
 
-The legacy tuple API is still available:
+All loading APIs return `Result<T>`:
 
 ```cpp
-auto [cfg, error] = yaml_cpp_struct::from_yaml<AccountInfo>("config.yaml");
-```
-
-For programmatic handling use the `Result<T>` API:
-
-```cpp
-auto result = yaml_cpp_struct::from_yaml_result<AccountInfo>("config.yaml");
+auto result = yaml_cpp_struct::from_yaml<AccountInfo>("config.yaml");
 if (!result) {
     std::cerr << "path=" << result.error.path
               << " line=" << result.error.line
@@ -151,24 +152,24 @@ if (!result) {
               << " code=" << static_cast<int>(result.error.code)
               << " message=" << result.error.message << '\n';
 }
+const AccountInfo& cfg = *result;
 
 // Parse a YAML string instead of a file.
-auto from_text = yaml_cpp_struct::from_yaml_str_result<AccountInfo>(yaml_text);
+auto from_text = yaml_cpp_struct::from_yaml_str<AccountInfo>(yaml_text);
 ```
 
 Node, stream and multi-document APIs:
 
 ```cpp
 YAML::Node node = YAML::Load(text);
-auto result = yaml_cpp_struct::from_node_result<AccountInfo>(node);
+auto result = yaml_cpp_struct::from_node<AccountInfo>(node);
 
-auto node_result = yaml_cpp_struct::to_node_result(cfg.value());
+auto node_result = yaml_cpp_struct::to_node(cfg);
 std::istringstream in(text);
-auto stream_result = yaml_cpp_struct::from_stream_result<AccountInfo>(in);
-yaml_cpp_struct::to_stream(cfg.value(), std::cout);
+auto stream_result = yaml_cpp_struct::from_yaml_stream<AccountInfo>(in);
 
-auto documents = yaml_cpp_struct::from_yaml_all_result<AccountInfo>("config.yaml");
-auto documents_from_text = yaml_cpp_struct::from_yaml_all_str_result<AccountInfo>(yaml_text);
+auto documents = yaml_cpp_struct::from_yaml_all<AccountInfo>("config.yaml");
+auto documents_from_text = yaml_cpp_struct::from_yaml_all_str<AccountInfo>(yaml_text);
 ```
 
 ## Environment variables
@@ -181,7 +182,7 @@ YCS_ENV_PREFIX(AccountInfo, "APP_")
 ```
 
 `from_yaml<AccountInfo>("config.yaml")` then loads the file and overlays environment
-variables automatically. `from_yaml_env` no longer exists.
+variables automatically.
 
 Naming rules:
 
@@ -260,15 +261,15 @@ yaml_cpp_struct::EnvOptions options;
 options.prefix = "APP_";
 options.ignore_empty = false;
 options.list_separator = ',';
-auto result = yaml_cpp_struct::from_yaml_result<Config>("config.yaml", options);
+auto result = yaml_cpp_struct::from_yaml<Config>("config.yaml", options);
 
 // No config file: environment + defaults only.
-auto env_only = yaml_cpp_struct::from_env_result<Config>(
+auto env_only = yaml_cpp_struct::from_env<Config>(
     yaml_cpp_struct::env_options_for<Config>());
 
 // Tests can use a lookup instead of the process environment.
-auto lookup = [](std::string_view name) -> std::optional<std::string> { ... };
-auto test_result = yaml_cpp_struct::from_yaml_result<Config>("config.yaml", lookup);
+options.lookup = [](std::string_view name) -> std::optional<std::string> { ... };
+auto test_result = yaml_cpp_struct::from_yaml<Config>("config.yaml", options);
 ```
 
 `EnvOptions::on_applied` is an audit callback receiving `(env_name, field_path)`;
@@ -279,20 +280,19 @@ but not the value.
 Environment variables are only read when a prefix is declared (or an explicit
 `EnvOptions` is passed), so unrelated process variables are never scanned.
 
-`from_env_result` follows the same rule: without a declared prefix it does not
-scan bare variables. For a struct that only uses explicit `YCS_ENV(...)` names,
-pass `EnvOptions{.enabled = true}` explicitly:
+`from_env` follows the same rule: without a declared prefix it does not scan bare
+variables. For a struct that only uses explicit `YCS_ENV(...)` names, pass
+`EnvOptions{.enabled = true}` explicitly:
 
 ```cpp
 yaml_cpp_struct::EnvOptions options;
 options.enabled = true;
-auto result = yaml_cpp_struct::from_env_result<Config>(options);
+auto result = yaml_cpp_struct::from_env<Config>(options);
 ```
 
-`from_node_result` is the low-level Node decoder and does not apply environment
-variables. `from_yaml_result`, `from_yaml_str_result`, `from_stream_result`,
-`from_yaml_all_result`, `from_yaml_all_str_result` and `from_env_result` do; the
-`from_yaml` convenience wrapper also does.
+`from_node` is the low-level Node decoder and does not apply environment
+variables. `from_yaml`, `from_yaml_str`, `from_yaml_stream`, `from_yaml_all`,
+`from_yaml_all_str` and `from_env` do.
 
 ## Enums
 
@@ -305,7 +305,7 @@ account_type: "Personal"  # or: 1
 ## testing
 
 The unit tests use [GoogleTest](https://github.com/google/googletest) and are a
-standalone CMake project. The suite currently has **50 cases** covering parsing,
+standalone CMake project. The suite currently has **52 cases** covering parsing,
 required and defaulted fields, error paths, 8-bit integers, enums, containers
 (including custom comparators / hashers), round-trips, environment loading
 (prefix/naming, nested and optional structs, explicit bindings, precedence,

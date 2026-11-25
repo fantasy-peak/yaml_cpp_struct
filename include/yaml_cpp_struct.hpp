@@ -174,17 +174,6 @@ inline std::string format_error(const Error &error) {
     return message;
 }
 
-struct EnvOptions {
-    bool enabled{true};
-    std::string prefix;
-    std::string separator{"__"};
-    bool uppercase{true};
-    bool ignore_empty{true};
-    bool parse_strings_as_yaml{false};
-    std::optional<char> list_separator;
-    std::function<void(std::string_view, std::string_view)> on_applied;
-};
-
 using EnvLookup = std::function<std::optional<std::string>(std::string_view)>;
 
 inline EnvLookup process_env() {
@@ -206,6 +195,18 @@ inline EnvLookup process_env() {
 #endif
     };
 }
+
+struct EnvOptions {
+    bool enabled{true};
+    std::string prefix;
+    std::string separator{"__"};
+    bool uppercase{true};
+    bool ignore_empty{true};
+    bool parse_strings_as_yaml{false};
+    std::optional<char> list_separator;
+    EnvLookup lookup{process_env()};
+    std::function<void(std::string_view, std::string_view)> on_applied;
+};
 
 // Set by YCS_ENV_PREFIX(T, "APP_").
 template <typename T> inline constexpr std::string_view env_prefix = {};
@@ -325,7 +326,9 @@ template <typename T> inline std::remove_cv_t<std::remove_reference_t<T>> node_a
 // yaml-cpp encodes (signed/unsigned) char by streaming the raw character,
 // which is not what users expect for 8-bit integer fields.  Encode them as
 // numbers instead.
-template <typename T> inline YAML::Node to_node(const T &v) {
+namespace detail {
+
+template <typename T> inline YAML::Node to_node_impl(const T &v) {
     using U = std::remove_cv_t<std::remove_reference_t<T>>;
     if constexpr (std::is_same_v<U, uint8_t>)
         return YAML::Node(static_cast<uint32_t>(v));
@@ -335,6 +338,8 @@ template <typename T> inline YAML::Node to_node(const T &v) {
         return YAML::Node(v);
 }
 
+} // namespace detail
+
 template <typename... T, std::size_t... I>
 inline std::tuple<T...> yaml_node_to_tuple(const YAML::Node &node, std::index_sequence<I...>) {
     return std::make_tuple(yaml_cpp_struct::node_as<T>(node[I])...);
@@ -343,7 +348,7 @@ inline std::tuple<T...> yaml_node_to_tuple(const YAML::Node &node, std::index_se
 template <typename... T, std::size_t... I>
 inline YAML::Node tuple_to_yaml_node(const std::tuple<T...> &tup, std::index_sequence<I...>) {
     YAML::Node node(YAML::NodeType::Sequence);
-    (node.push_back(yaml_cpp_struct::to_node(std::get<I>(tup))), ...);
+    (node.push_back(yaml_cpp_struct::detail::to_node_impl(std::get<I>(tup))), ...);
     return node;
 }
 
@@ -427,8 +432,8 @@ template <typename T> inline void decode_struct(const YAML::Node &node, T &rhs, 
 
 template <typename T> inline YAML::Node encode_struct(const T &rhs) {
     YAML::Node node(YAML::NodeType::Map);
-    field_access<T>::for_each(rhs,
-                              [&](const char *name, auto &value) { node[name] = yaml_cpp_struct::to_node(value); });
+    field_access<T>::for_each(
+        rhs, [&](const char *name, auto &value) { node[name] = yaml_cpp_struct::detail::to_node_impl(value); });
     return node;
 }
 
@@ -653,8 +658,7 @@ inline void apply_env_bindings(YAML::Node root, const std::vector<EnvBinding> &b
     }
 }
 
-template <typename T>
-inline void apply_env_options(YAML::Node &node, const EnvOptions &options, const EnvLookup &lookup) {
+template <typename T> inline void apply_env_options(YAML::Node &node, const EnvOptions &options) {
     if (!options.enabled)
         return;
 
@@ -669,14 +673,14 @@ inline void apply_env_options(YAML::Node &node, const EnvOptions &options, const
         std::vector<EnvBinding> bindings;
         std::unordered_map<std::string, std::string> owners;
         std::vector<std::string> keys;
-        collect_env_bindings<T>(options, lookup, "", "", false, keys, bindings, owners);
+        collect_env_bindings<T>(options, options.lookup, "", "", false, keys, bindings, owners);
         apply_env_bindings(node, bindings, options);
     }
 }
 
 } // namespace detail
 
-template <typename T> inline Result<T> from_node_result(const YAML::Node &node) {
+template <typename T> inline Result<T> from_node(const YAML::Node &node) {
     try {
         return Result<T>{yaml_cpp_struct::node_as<T>(node), Error{}};
     } catch (const Exception &e) {
@@ -690,10 +694,9 @@ template <typename T> inline Result<T> from_node_result(const YAML::Node &node) 
 
 namespace detail {
 
-template <typename T>
-inline Result<T> decode_with_env(YAML::Node &node, const EnvOptions &options, const EnvLookup &lookup) {
+template <typename T> inline Result<T> decode_with_env(YAML::Node &node, const EnvOptions &options) {
     try {
-        apply_env_options<T>(node, options, lookup);
+        apply_env_options<T>(node, options);
     } catch (const Exception &e) {
         return Result<T>{std::nullopt, e.error()};
     } catch (const YAML::Exception &e) {
@@ -701,17 +704,16 @@ inline Result<T> decode_with_env(YAML::Node &node, const EnvOptions &options, co
     } catch (const std::exception &e) {
         return Result<T>{std::nullopt, Error{ErrorCode::EnvParseError, {}, e.what(), -1, -1}};
     }
-    return from_node_result<T>(node);
+    return from_node<T>(node);
 }
 
 template <typename T>
-inline Result<std::vector<T>> decode_all_with_env(std::vector<YAML::Node> &nodes, const EnvOptions &options,
-                                                  const EnvLookup &lookup) {
+inline Result<std::vector<T>> decode_all_with_env(std::vector<YAML::Node> &nodes, const EnvOptions &options) {
     try {
         std::vector<T> values;
         values.reserve(nodes.size());
         for (auto &node : nodes) {
-            apply_env_options<T>(node, options, lookup);
+            apply_env_options<T>(node, options);
             values.push_back(yaml_cpp_struct::node_as<T>(node));
         }
         return Result<std::vector<T>>{std::move(values), Error{}};
@@ -728,8 +730,7 @@ inline Result<std::vector<T>> decode_all_with_env(std::vector<YAML::Node> &nodes
 } // namespace detail
 
 template <typename T>
-inline Result<T> from_yaml_result(const std::string &file, const EnvOptions &options = env_options_for<T>(),
-                                  const EnvLookup &lookup = process_env()) {
+inline Result<T> from_yaml(const std::string &file, const EnvOptions &options = env_options_for<T>()) {
     YAML::Node node;
     try {
         node = YAML::LoadFile(file);
@@ -741,16 +742,11 @@ inline Result<T> from_yaml_result(const std::string &file, const EnvOptions &opt
     } catch (const std::exception &e) {
         return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
     }
-    return detail::decode_with_env<T>(node, options, lookup);
-}
-
-template <typename T> inline Result<T> from_yaml_result(const std::string &file, const EnvLookup &lookup) {
-    return from_yaml_result<T>(file, env_options_for<T>(), lookup);
+    return detail::decode_with_env<T>(node, options);
 }
 
 template <typename T>
-inline Result<T> from_yaml_str_result(const std::string &yaml, const EnvOptions &options = env_options_for<T>(),
-                                      const EnvLookup &lookup = process_env()) {
+inline Result<T> from_yaml_str(const std::string &yaml, const EnvOptions &options = env_options_for<T>()) {
     YAML::Node node;
     try {
         node = YAML::Load(yaml);
@@ -759,16 +755,11 @@ inline Result<T> from_yaml_str_result(const std::string &yaml, const EnvOptions 
     } catch (const std::exception &e) {
         return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
     }
-    return detail::decode_with_env<T>(node, options, lookup);
-}
-
-template <typename T> inline Result<T> from_yaml_str_result(const std::string &yaml, const EnvLookup &lookup) {
-    return from_yaml_str_result<T>(yaml, env_options_for<T>(), lookup);
+    return detail::decode_with_env<T>(node, options);
 }
 
 template <typename T>
-inline Result<T> from_stream_result(std::istream &in, const EnvOptions &options = env_options_for<T>(),
-                                    const EnvLookup &lookup = process_env()) {
+inline Result<T> from_yaml_stream(std::istream &in, const EnvOptions &options = env_options_for<T>()) {
     YAML::Node node;
     try {
         node = YAML::Load(in);
@@ -777,17 +768,11 @@ inline Result<T> from_stream_result(std::istream &in, const EnvOptions &options 
     } catch (const std::exception &e) {
         return Result<T>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
     }
-    return detail::decode_with_env<T>(node, options, lookup);
-}
-
-template <typename T> inline Result<T> from_stream_result(std::istream &in, const EnvLookup &lookup) {
-    return from_stream_result<T>(in, env_options_for<T>(), lookup);
+    return detail::decode_with_env<T>(node, options);
 }
 
 template <typename T>
-inline Result<std::vector<T>> from_yaml_all_result(const std::string &file,
-                                                   const EnvOptions &options = env_options_for<T>(),
-                                                   const EnvLookup &lookup = process_env()) {
+inline Result<std::vector<T>> from_yaml_all(const std::string &file, const EnvOptions &options = env_options_for<T>()) {
     std::vector<YAML::Node> nodes;
     try {
         nodes = YAML::LoadAllFromFile(file);
@@ -800,18 +785,12 @@ inline Result<std::vector<T>> from_yaml_all_result(const std::string &file,
     } catch (const std::exception &e) {
         return Result<std::vector<T>>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
     }
-    return detail::decode_all_with_env<T>(nodes, options, lookup);
+    return detail::decode_all_with_env<T>(nodes, options);
 }
 
 template <typename T>
-inline Result<std::vector<T>> from_yaml_all_result(const std::string &file, const EnvLookup &lookup) {
-    return from_yaml_all_result<T>(file, env_options_for<T>(), lookup);
-}
-
-template <typename T>
-inline Result<std::vector<T>> from_yaml_all_str_result(const std::string &yaml,
-                                                       const EnvOptions &options = env_options_for<T>(),
-                                                       const EnvLookup &lookup = process_env()) {
+inline Result<std::vector<T>> from_yaml_all_str(const std::string &yaml,
+                                                const EnvOptions &options = env_options_for<T>()) {
     std::vector<YAML::Node> nodes;
     try {
         nodes = YAML::LoadAll(yaml);
@@ -821,28 +800,17 @@ inline Result<std::vector<T>> from_yaml_all_str_result(const std::string &yaml,
     } catch (const std::exception &e) {
         return Result<std::vector<T>>{std::nullopt, Error{ErrorCode::ParseError, {}, e.what(), -1, -1}};
     }
-    return detail::decode_all_with_env<T>(nodes, options, lookup);
+    return detail::decode_all_with_env<T>(nodes, options);
 }
 
-template <typename T>
-inline Result<std::vector<T>> from_yaml_all_str_result(const std::string &yaml, const EnvLookup &lookup) {
-    return from_yaml_all_str_result<T>(yaml, env_options_for<T>(), lookup);
-}
-
-template <typename T>
-inline Result<T> from_env_result(const EnvOptions &options = env_options_for<T>(),
-                                 const EnvLookup &lookup = process_env()) {
+template <typename T> inline Result<T> from_env(const EnvOptions &options = env_options_for<T>()) {
     YAML::Node node(YAML::NodeType::Map);
-    return detail::decode_with_env<T>(node, options, lookup);
+    return detail::decode_with_env<T>(node, options);
 }
 
-template <typename T> inline Result<T> from_env_result(const EnvLookup &lookup) {
-    return from_env_result<T>(env_options_for<T>(), lookup);
-}
-
-template <typename T> inline Result<YAML::Node> to_node_result(const T &obj) {
+template <typename T> inline Result<YAML::Node> to_node(const T &obj) {
     try {
-        return Result<YAML::Node>{yaml_cpp_struct::to_node(obj), Error{}};
+        return Result<YAML::Node>{yaml_cpp_struct::detail::to_node_impl(obj), Error{}};
     } catch (const Exception &e) {
         return Result<YAML::Node>{std::nullopt, e.error()};
     } catch (const std::exception &e) {
@@ -850,10 +818,10 @@ template <typename T> inline Result<YAML::Node> to_node_result(const T &obj) {
     }
 }
 
-template <typename T> inline Result<std::string> to_yaml_result(const T &obj) {
+template <typename T> inline Result<std::string> to_yaml(const T &obj) {
     try {
         YAML::Emitter emitter;
-        emitter << yaml_cpp_struct::to_node(obj);
+        emitter << yaml_cpp_struct::detail::to_node_impl(obj);
         if (!emitter.good())
             return Result<std::string>{std::nullopt, Error{ErrorCode::EmitError, {}, emitter.GetLastError(), -1, -1}};
         return Result<std::string>{std::string(emitter.c_str()), Error{}};
@@ -862,32 +830,6 @@ template <typename T> inline Result<std::string> to_yaml_result(const T &obj) {
     } catch (const std::exception &e) {
         return Result<std::string>{std::nullopt, Error{ErrorCode::EmitError, {}, e.what(), -1, -1}};
     }
-}
-
-template <typename T> inline Error to_stream(const T &obj, std::ostream &out) {
-    const auto result = to_yaml_result(obj);
-    if (!result)
-        return result.error;
-
-    out << *result.value;
-    if (!out)
-        return Error{ErrorCode::EmitError, {}, "failed to write to stream", -1, -1};
-    return Error{};
-}
-
-template <typename T> inline std::tuple<std::optional<T>, std::string> from_yaml(const std::string &file) {
-    auto result = from_yaml_result<T>(file);
-    return std::make_tuple(std::move(result.value), format_error(result.error));
-}
-
-template <typename T> inline std::tuple<std::optional<T>, std::string> from_yaml_str(const std::string &yaml) {
-    auto result = from_yaml_str_result<T>(yaml);
-    return std::make_tuple(std::move(result.value), format_error(result.error));
-}
-
-template <typename T> inline std::tuple<std::optional<std::string>, std::string> to_yaml(const T &obj) {
-    auto result = to_yaml_result(obj);
-    return std::make_tuple(std::move(result.value), format_error(result.error));
 }
 
 } // namespace yaml_cpp_struct
@@ -907,7 +849,7 @@ template <typename K, typename V> struct convert<std::unordered_map<K, V>> {
     static Node encode(const std::unordered_map<K, V> &rhs) {
         Node node(NodeType::Map);
         for (auto &[k, v] : rhs)
-            node.force_insert(yaml_cpp_struct::to_node(k), yaml_cpp_struct::to_node(v));
+            node.force_insert(yaml_cpp_struct::detail::to_node_impl(k), yaml_cpp_struct::detail::to_node_impl(v));
         return node;
     }
 };
@@ -920,7 +862,9 @@ template <typename R, typename P> struct convert<std::chrono::duration<R, P>> {
         return true;
     }
 
-    static Node encode(const std::chrono::duration<R, P> &rhs) { return yaml_cpp_struct::to_node(rhs.count()); }
+    static Node encode(const std::chrono::duration<R, P> &rhs) {
+        return yaml_cpp_struct::detail::to_node_impl(rhs.count());
+    }
 };
 
 template <typename V, typename H, typename P, typename A> struct convert<std::unordered_set<V, H, P, A>> {
@@ -936,7 +880,7 @@ template <typename V, typename H, typename P, typename A> struct convert<std::un
     static Node encode(const std::unordered_set<V, H, P, A> &rhs) {
         Node node(NodeType::Sequence);
         for (auto &it : rhs)
-            node.push_back(yaml_cpp_struct::to_node(it));
+            node.push_back(yaml_cpp_struct::detail::to_node_impl(it));
         return node;
     }
 };
@@ -954,7 +898,7 @@ template <typename V, typename C, typename A> struct convert<std::set<V, C, A>> 
     static Node encode(const std::set<V, C, A> &rhs) {
         Node node(NodeType::Sequence);
         for (auto &it : rhs)
-            node.push_back(yaml_cpp_struct::to_node(it));
+            node.push_back(yaml_cpp_struct::detail::to_node_impl(it));
         return node;
     }
 };
@@ -972,7 +916,7 @@ template <typename T, typename A> struct convert<std::deque<T, A>> {
     static Node encode(const std::deque<T, A> &rhs) {
         Node node(NodeType::Sequence);
         for (auto &it : rhs)
-            node.push_back(yaml_cpp_struct::to_node(it));
+            node.push_back(yaml_cpp_struct::detail::to_node_impl(it));
         return node;
     }
 };
@@ -991,7 +935,7 @@ template <typename T, typename A> struct convert<std::forward_list<T, A>> {
     static Node encode(const std::forward_list<T, A> &rhs) {
         Node node(NodeType::Sequence);
         for (auto &it : rhs)
-            node.push_back(yaml_cpp_struct::to_node(it));
+            node.push_back(yaml_cpp_struct::detail::to_node_impl(it));
         return node;
     }
 };
@@ -1010,7 +954,7 @@ template <typename Container> inline bool decode_numeric_sequence(const Node &no
 template <typename Container> inline Node encode_numeric_sequence(const Container &rhs) {
     Node node(NodeType::Sequence);
     for (auto &it : rhs)
-        node.push_back(yaml_cpp_struct::to_node(it));
+        node.push_back(yaml_cpp_struct::detail::to_node_impl(it));
     return node;
 }
 
@@ -1104,7 +1048,7 @@ template <typename K, typename C, typename A> struct convert<std::map<K, uint8_t
     static Node encode(const std::map<K, uint8_t, C, A> &rhs) {
         Node node(NodeType::Map);
         for (auto &[k, v] : rhs)
-            node.force_insert(yaml_cpp_struct::to_node(k), yaml_cpp_struct::to_node(v));
+            node.force_insert(yaml_cpp_struct::detail::to_node_impl(k), yaml_cpp_struct::detail::to_node_impl(v));
         return node;
     }
 };
@@ -1121,7 +1065,7 @@ template <typename K, typename C, typename A> struct convert<std::map<K, int8_t,
     static Node encode(const std::map<K, int8_t, C, A> &rhs) {
         Node node(NodeType::Map);
         for (auto &[k, v] : rhs)
-            node.force_insert(yaml_cpp_struct::to_node(k), yaml_cpp_struct::to_node(v));
+            node.force_insert(yaml_cpp_struct::detail::to_node_impl(k), yaml_cpp_struct::detail::to_node_impl(v));
         return node;
     }
 };
@@ -1154,7 +1098,7 @@ template <typename T> struct convert<std::optional<T>> {
 
     static Node encode(const std::optional<T> &rhs) {
         if (rhs.has_value())
-            return yaml_cpp_struct::to_node(rhs.value());
+            return yaml_cpp_struct::detail::to_node_impl(rhs.value());
         else
             return Node{};
     }
@@ -1203,7 +1147,7 @@ template <typename... T> struct convert<std::variant<T...>> {
     }
 
     static Node encode(const std::variant<T...> &rhs) {
-        return std::visit([](const auto &v) { return yaml_cpp_struct::to_node(v); }, rhs);
+        return std::visit([](const auto &v) { return yaml_cpp_struct::detail::to_node_impl(v); }, rhs);
     }
 };
 

@@ -286,76 +286,80 @@ void verify_config(const Config &cfg) {
 }
 
 void verify_round_trip(const Config &cfg) {
-    const auto [str, emit_error] = yaml_cpp_struct::to_yaml(cfg);
-    check(str.has_value(), "to_yaml should succeed");
-    check(emit_error.empty(), "to_yaml error message");
-    if (!str)
+    const auto yaml_result = yaml_cpp_struct::to_yaml(cfg);
+    check(yaml_result.value.has_value(), "to_yaml should succeed");
+    check(yaml_result.error.code == yaml_cpp_struct::ErrorCode::None, "to_yaml error message");
+    if (!yaml_result)
         return;
 
-    const auto [round_trip, parse_error] = yaml_cpp_struct::from_yaml_str<Config>(*str);
-    check(round_trip.has_value(), "round-trip should parse");
-    check(parse_error.empty(), "round-trip error message");
-    if (!round_trip)
+    const auto round_result = yaml_cpp_struct::from_yaml_str<Config>(*yaml_result);
+    check(round_result.value.has_value(), "round-trip should parse");
+    check(round_result.error.code == yaml_cpp_struct::ErrorCode::None, "round-trip error message");
+    if (!round_result)
         return;
 
-    check(round_trip->account_info.name == cfg.account_info.name, "round-trip account_info.name");
-    check(round_trip->set_vec == cfg.set_vec, "round-trip set_vec");
-    check(round_trip->account_type == cfg.account_type, "round-trip account_type");
-    check(round_trip->v1 == cfg.v1, "round-trip v1");
-    check(round_trip->default_opt == cfg.default_opt, "round-trip default_opt");
+    const Config &round_trip = *round_result;
+    check(round_trip.account_info.name == cfg.account_info.name, "round-trip account_info.name");
+    check(round_trip.set_vec == cfg.set_vec, "round-trip set_vec");
+    check(round_trip.account_type == cfg.account_type, "round-trip account_type");
+    check(round_trip.v1 == cfg.v1, "round-trip v1");
+    check(round_trip.default_opt == cfg.default_opt, "round-trip default_opt");
 }
 
 void verify_8bit_fields() {
-    const auto [bytes, parse_error] = yaml_cpp_struct::from_yaml_str<ByteFields>("byte: 200\nsbyte: -100\n");
-    check(bytes.has_value(), "8-bit fields should parse");
-    check(parse_error.empty(), "8-bit parse error message");
-    if (!bytes)
+    const auto bytes_result = yaml_cpp_struct::from_yaml_str<ByteFields>("byte: 200\nsbyte: -100\n");
+    check(bytes_result.value.has_value(), "8-bit fields should parse");
+    check(bytes_result.error.code == yaml_cpp_struct::ErrorCode::None, "8-bit parse error message");
+    if (!bytes_result)
         return;
 
-    check(bytes->byte == 200, "uint8_t field");
-    check(bytes->sbyte == -100, "int8_t field");
+    const ByteFields &bytes = *bytes_result;
+    check(bytes.byte == 200, "uint8_t field");
+    check(bytes.sbyte == -100, "int8_t field");
 
-    const auto [encoded, emit_error] = yaml_cpp_struct::to_yaml(*bytes);
-    check(encoded.has_value(), "8-bit fields should encode");
-    check(emit_error.empty(), "8-bit emit error message");
-    if (encoded) {
-        check(encoded->find("200") != std::string::npos, "uint8_t should encode as a number");
-        check(encoded->find("-100") != std::string::npos, "int8_t should encode as a number");
+    const auto encoded_result = yaml_cpp_struct::to_yaml(bytes);
+    check(encoded_result.value.has_value(), "8-bit fields should encode");
+    check(encoded_result.error.code == yaml_cpp_struct::ErrorCode::None, "8-bit emit error message");
+    if (encoded_result) {
+        check(encoded_result->find("200") != std::string::npos, "uint8_t should encode as a number");
+        check(encoded_result->find("-100") != std::string::npos, "int8_t should encode as a number");
     }
 
-    const auto [overflow, overflow_error] = yaml_cpp_struct::from_yaml_str<ByteFields>("byte: 300\nsbyte: 0\n");
-    check(!overflow.has_value(), "uint8_t overflow should be rejected");
-    check(!overflow_error.empty(), "uint8_t overflow error message");
+    const auto overflow = yaml_cpp_struct::from_yaml_str<ByteFields>("byte: 300\nsbyte: 0\n");
+    check(!overflow.value.has_value(), "uint8_t overflow should be rejected");
+    check(overflow.error.code == yaml_cpp_struct::ErrorCode::OutOfRange, "uint8_t overflow error code");
 }
 
 void verify_set_container() {
-    const auto [values, parse_error] = yaml_cpp_struct::from_yaml_str<std::set<int>>("[3, 1, 2, 2]\n");
-    check(values.has_value(), "std::set should parse");
-    check(parse_error.empty(), "std::set parse error message");
-    if (!values)
+    const auto values_result = yaml_cpp_struct::from_yaml_str<std::set<int>>("[3, 1, 2, 2]\n");
+    check(values_result.value.has_value(), "std::set should parse");
+    check(values_result.error.code == yaml_cpp_struct::ErrorCode::None, "std::set parse error message");
+    if (!values_result)
         return;
 
-    check(*values == std::set<int>{1, 2, 3}, "std::set contents");
+    const std::set<int> &values = *values_result;
+    check(values == std::set<int>{1, 2, 3}, "std::set contents");
 
-    const auto [encoded, emit_error] = yaml_cpp_struct::to_yaml(*values);
-    check(encoded.has_value(), "std::set should encode");
-    check(emit_error.empty(), "std::set emit error message");
-    if (encoded)
-        check(encoded->find("1") != std::string::npos && encoded->find("3") != std::string::npos, "std::set encoding");
+    const auto encoded_result = yaml_cpp_struct::to_yaml(values);
+    check(encoded_result.value.has_value(), "std::set should encode");
+    check(encoded_result.error.code == yaml_cpp_struct::ErrorCode::None, "std::set emit error message");
+    if (encoded_result)
+        check(encoded_result->find("1") != std::string::npos && encoded_result->find("3") != std::string::npos,
+              "std::set encoding");
 }
 
 void verify_enum_values() {
-    const auto [by_name, name_error] = yaml_cpp_struct::from_yaml_str<AccountType>("\"Company\"\n");
-    check(by_name.has_value() && *by_name == AccountType::Company, "enum decoded by name");
-    check(name_error.empty(), "enum by-name error message");
+    const auto by_name = yaml_cpp_struct::from_yaml_str<AccountType>("\"Company\"\n");
+    check(by_name.value.has_value() && *by_name.value == AccountType::Company, "enum decoded by name");
+    check(by_name.error.code == yaml_cpp_struct::ErrorCode::None, "enum by-name error message");
 
-    const auto [by_value, value_error] = yaml_cpp_struct::from_yaml_str<AccountType>("1\n");
-    check(by_value.has_value() && *by_value == AccountType::Personal, "enum decoded by numeric value");
-    check(value_error.empty(), "enum by-value error message");
+    const auto by_value = yaml_cpp_struct::from_yaml_str<AccountType>("1\n");
+    check(by_value.value.has_value() && *by_value.value == AccountType::Personal, "enum decoded by numeric value");
+    check(by_value.error.code == yaml_cpp_struct::ErrorCode::None, "enum by-value error message");
 
-    const auto [invalid, invalid_error] = yaml_cpp_struct::from_yaml_str<AccountType>("\"Unknown\"\n");
-    check(!invalid.has_value(), "unknown enum name should be rejected");
-    check(!invalid_error.empty(), "unknown enum error message");
+    const auto invalid = yaml_cpp_struct::from_yaml_str<AccountType>("\"Unknown\"\n");
+    check(!invalid.value.has_value(), "unknown enum name should be rejected");
+    check(invalid.error.code == yaml_cpp_struct::ErrorCode::BadEnum, "unknown enum error code");
 }
 
 void verify_env_overrides(const char *config_path) {
@@ -363,39 +367,41 @@ void verify_env_overrides(const char *config_path) {
     set_env("YCS_ENV_ACCOUNT_INFO__NAME", "from-env");
     set_env("YCS_ENV_IPS", "[\"Google\", \"Runoob\", \"Taobao\"]");
 
-    const auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(config_path);
-    check(cfg.has_value(), "environment config should parse");
-    check(error.empty(), "environment error message");
-    if (!cfg)
+    const auto cfg_result = yaml_cpp_struct::from_yaml<Config>(config_path);
+    check(cfg_result.value.has_value(), "environment config should parse");
+    check(cfg_result.error.code == yaml_cpp_struct::ErrorCode::None, "environment error message");
+    if (!cfg_result)
         return;
 
-    check(cfg->account_info.name == "from-env", "nested environment override");
-    check(cfg->ips == std::vector<std::string>{"Google", "Runoob", "Taobao"}, "top-level environment override");
+    const Config &cfg = *cfg_result;
+    check(cfg.account_info.name == "from-env", "nested environment override");
+    check(cfg.ips == std::vector<std::string>{"Google", "Runoob", "Taobao"}, "top-level environment override");
 }
 
 int main(int, char **argv) {
     spdlog::info("Load yaml config");
-    const auto [cfg, error] = yaml_cpp_struct::from_yaml<Config>(argv[1]);
-    if (!cfg) {
-        spdlog::error("error: [{}]", error);
+    const auto cfg_result = yaml_cpp_struct::from_yaml<Config>(argv[1]);
+    if (!cfg_result) {
+        spdlog::error("error: [{}]", yaml_cpp_struct::format_error(cfg_result.error));
         return -1;
     }
+    const Config &cfg = *cfg_result;
 
-    spdlog::info("\n{}", to_string(cfg.value()));
+    spdlog::info("\n{}", to_string(cfg));
 
-    const auto [str, emit_error] = yaml_cpp_struct::to_yaml(cfg.value());
-    if (!str) {
-        spdlog::error("to_yaml error: [{}]", emit_error);
+    const auto yaml_result = yaml_cpp_struct::to_yaml(cfg);
+    if (!yaml_result) {
+        spdlog::error("to_yaml error: [{}]", yaml_cpp_struct::format_error(yaml_result.error));
         return -1;
     }
-    spdlog::info("\n{}", str.value());
+    spdlog::info("\n{}", *yaml_result);
 
 #ifdef OPEN_YAML_TO_JSON
-    spdlog::info("\n{}", yaml_cpp_struct::yaml_to_json(str.value()).dump());
+    spdlog::info("\n{}", yaml_cpp_struct::yaml_to_json(*yaml_result).dump());
 #endif
 
-    verify_config(cfg.value());
-    verify_round_trip(cfg.value());
+    verify_config(cfg);
+    verify_round_trip(cfg);
     verify_8bit_fields();
     verify_set_container();
     verify_enum_values();
